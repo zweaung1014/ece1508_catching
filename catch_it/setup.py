@@ -13,7 +13,7 @@ root_dir = os.path.dirname(os.path.realpath(__file__))
 # Minimum dependencies required prior to installation
 INSTALL_REQUIRES = [
     "gymnasium==0.29.1", 
-    "mujoco>=3.0.0",
+    "mujoco>=3.1.5",  # <replicate> in the hoop MJCF
 ]
 
 # Installation operation
