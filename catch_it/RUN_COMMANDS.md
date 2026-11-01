@@ -1,5 +1,8 @@
 # Run Commands (local setup: ThinkPad P14s Gen 5, RTX 500 Ada)
 
+Task: `HoopCatch` — fixed-base xArm6 catches a thrown ball with the hoop.
+Design notes (states, actions, rewards, throws, what to tune): `../docs/hoop_rl_design.md`.
+
 Always start from the project folder with the conda env active:
 
 ```bash
@@ -15,111 +18,100 @@ python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_
 pgrep -af train_DCMM                         # leftover processes? kill with: pkill -f train_DCMM
 ```
 
-## 1. Train stage 1 — Tracking (base + arm reach the object)
+## 1. Check the environment (no learning)
 
-Smoke test (~3 min, checks everything works):
+Run from `gym_dcmm/envs/`. The oracle is a privileged scripted controller that drives the hoop to the
+throw's aim point; it should catch ~95% of the throws. If it doesn't, the env is broken, not the policy.
 
 ```bash
-MUJOCO_GL=egl OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+cd gym_dcmm/envs
+python DcmmVecEnv.py --oracle --episodes 100            # headless, prints the outcome of every episode
+python DcmmVecEnv.py --oracle --viewer                  # watch it (real time)
+python DcmmVecEnv.py --viewer                           # drive the hoop with the keyboard
+python DcmmVecEnv.py --oracle --episodes 3 --print_reward   # print every reward term each step
+cd ../..
+```
+
+Keyboard: arrows = hoop x/y, numpad `+`/`-` = z, numpad `7`/`9` = tilt about hoop x, `4`/`6` = tilt about hoop y.
+
+## 2. Train
+
+Smoke test (~1 min, checks everything works):
+
+```bash
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 systemd-run --user --scope -p MemoryMax=12G \
-nice -n 10 python train_DCMM.py task=Tracking num_envs=8 device_id=0 \
-  train.ppo.max_agent_steps=50000 output_name=smoke_test
+nice -n 10 python train_DCMM.py task=HoopCatch num_envs=8 device_id=0 \
+  train.ppo.max_agent_steps=30000 output_name=smoke_test
 ```
 
 Full run (auto-stops after 10 h; remove `timeout --signal=INT 10h` to run the full 25M steps):
 
 ```bash
-MUJOCO_GL=egl OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 systemd-run --user --scope -p MemoryMax=12G \
 nice -n 10 timeout --signal=INT 10h \
-python train_DCMM.py task=Tracking num_envs=8 device_id=0 output_name=track_full \
-  2>&1 | tee track_full.log
+python train_DCMM.py task=HoopCatch num_envs=8 device_id=0 output_name=hoop_full \
+  2>&1 | tee hoop_full.log
 ```
 
 - Stop any time with **Ctrl+C** — checkpoints are saved every epoch.
-- Time estimate: `max_agent_steps / FPS` seconds (≈214–276 FPS with 8 envs here).
+- Time estimate: `max_agent_steps / FPS` seconds (≈500 FPS with 8 envs here → 25M steps ≈ 14 h).
+- No camera rendering happens during training, so `MUJOCO_GL=egl` is not needed anymore.
 
-## 2. Monitor training
+## 3. Monitor training
 
 ```bash
 tensorboard --logdir ~/ece1508/catch_it/outputs
 ```
 
-Open http://localhost:6006 → watch `metrics/episode_success_per_step` and `metrics/episode_rewards_per_step`.
+Open http://localhost:6006 and watch:
 
-## 3. Find the trained policy
+- `metrics/episode_success_per_step` — catch rate (the number that matters)
+- `metrics/episode_rewards_per_step` — total reward per episode
+- `episode/min_path_dist` — closest the hoop got to the ball's predicted path (should shrink towards 0)
+- `episode/outcome/*` — fraction of episodes ending in catch / ball_floor / ball_robot / collision / timeout
+- `episode/rim_hits`, `episode/ik_fails` — per-episode counts
+
+## 4. Find the trained policy
 
 ```bash
-ls outputs/track_full/*/*/nn/
+ls outputs/hoop_full/*/*/nn/
 ```
 
 - `best_reward_XX.XX.pth` — best checkpoint (use this)
 - `last.pth` — most recent epoch
 
-## 4. Test a tracking policy
+## 5. Test a policy
 
-> Test mode **never stops by itself** — press **Ctrl+C** when done.
-> Paths containing `:` must be wrapped as `'checkpoint_tracking="..."'`.
+Full post-training walkthrough (reading the results, comparing checkpoints, diagnosing failures): `../docs/after_training.md`.
 
-Watch in the 3D viewer (no `MUJOCO_GL=egl` here):
+> Test mode stops by itself after `train.ppo.max_test_steps` (10000) agent steps; Ctrl+C also works.
+> Paths containing `:` must be wrapped as `'checkpoint="..."'`.
 
-```bash
-python train_DCMM.py task=Tracking test=True num_envs=1 device_id=0 viewer=True \
-  'checkpoint_tracking="/home/zweminhtetaung/ece1508/catch_it/outputs/track_full/2026-10-28/02:05:43/nn/best_reward_25.67.pth"'
-```
-
-Measure success rate (no window, 8 parallel sims; read `mean_success` once `Sample Length` hits 100):
+Watch in the 3D viewer:
 
 ```bash
-MUJOCO_GL=egl python train_DCMM.py task=Tracking test=True num_envs=8 device_id=0 \
-  'checkpoint_tracking="/home/zweminhtetaung/ece1508/catch_it/outputs/track_full/2026-10-28/02:05:43/nn/best_reward_25.67.pth"'
+python train_DCMM.py task=HoopCatch test=True num_envs=1 device_id=0 viewer=True \
+  'checkpoint="/home/zweminhtetaung/ece1508/catch_it/outputs/hoop_full/<date>/<time>/nn/best_reward_XX.XX.pth"'
 ```
 
-Pretrained baseline for comparison:
+Measure the catch rate (no window, 8 parallel sims; read `mean_success` once `Sample Length` hits 100):
 
 ```bash
-MUJOCO_GL=egl python train_DCMM.py task=Tracking test=True num_envs=8 device_id=0 \
-  checkpoint_tracking=assets/models/track.pth
+python train_DCMM.py task=HoopCatch test=True num_envs=8 device_id=0 \
+  'checkpoint="/home/zweminhtetaung/ece1508/catch_it/outputs/hoop_full/<date>/<time>/nn/best_reward_XX.XX.pth"'
 ```
 
-## 5. Train stage 2 — Catching (adds hand grasping, starts from tracking policy)
-
-Leave `checkpoint_catching` empty, otherwise the tracking weights are not loaded.
-
-```bash
-MUJOCO_GL=egl OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
-systemd-run --user --scope -p MemoryMax=12G \
-nice -n 10 timeout --signal=INT 10h \
-python train_DCMM.py task=Catching_TwoStage num_envs=8 device_id=0 output_name=catch_full \
-  'checkpoint_tracking="/home/zweminhtetaung/ece1508/catch_it/outputs/track_full/2026-10-28/02:05:43/nn/best_reward_25.67.pth"' \
-  2>&1 | tee catch_full.log
-```
-
-## 6. Test a catching policy
-
-Replace `<date>/<time>/...` with your path from `ls outputs/catch_full/*/*/nn/`.
-
-```bash
-python train_DCMM.py task=Catching_TwoStage test=True num_envs=1 device_id=0 viewer=True \
-  'checkpoint_catching="/home/zweminhtetaung/ece1508/catch_it/outputs/catch_full/<date>/<time>/nn/best_reward_XX.XX.pth"'
-```
-
-Pretrained catching baseline:
-
-```bash
-python train_DCMM.py task=Catching_TwoStage test=True num_envs=1 device_id=0 viewer=True \
-  checkpoint_catching=assets/models/catch_two_stage.pth
-```
-
-## 7. Resume an interrupted run
+## 6. Resume an interrupted run
 
 Only weights + obs normalizer are restored; step counter, optimizer, and best-reward reset. Set the remaining budget yourself.
 
 ```bash
-MUJOCO_GL=egl OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
 systemd-run --user --scope -p MemoryMax=12G \
-nice -n 10 python train_DCMM.py task=Tracking num_envs=8 device_id=0 output_name=track_full_resume \
-  'checkpoint_tracking="/path/to/nn/last.pth"' \
+nice -n 10 python train_DCMM.py task=HoopCatch num_envs=8 device_id=0 output_name=hoop_full_resume \
+  'checkpoint="/path/to/nn/last.pth"' \
   train.ppo.max_agent_steps=<remaining_steps>
 ```
 
@@ -129,6 +121,5 @@ nice -n 10 python train_DCMM.py task=Tracking num_envs=8 device_id=0 output_name
   For `num_envs=4` add `train.ppo.minibatch_size=128`.
 - Too many envs freezes the laptop (RAM/CPU). 8 is safe here; try 16 only after a short FPS test.
 - No GPU / driver issue → use `device_id=-1` (CPU; training speed barely changes since simulation is CPU-bound).
-- If EGL fails at startup, drop `MUJOCO_GL=egl` or force Intel EGL:
-  `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json MUJOCO_GL=egl ...`
+- Checkpoints from the old Tracking/Catching tasks do not load (different observation/action sizes).
 - Output folder timestamps use Asia/Shanghai time, not local time.

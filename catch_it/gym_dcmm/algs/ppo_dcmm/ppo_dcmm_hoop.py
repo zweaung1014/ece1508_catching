@@ -10,12 +10,17 @@ import wandb
 import numpy as np
 
 from .experience import ExperienceBuffer
-from .models_track import ActorCritic
+from .models_hoop import ActorCritic
 from .utils import AverageScalarMeter, RunningMeanStd
 
 from tensorboardX import SummaryWriter
 
-class PPO_Track(object):
+# Must match OUTCOME_NAMES in gym_dcmm/envs/DcmmVecEnv.py
+OUTCOME_NAMES = ["none", "catch", "ball_floor", "ball_robot", "collision", "timeout"]
+# Per-episode values the env reports in its last info, averaged over the last episodes
+EPISODE_STATS = ["success", "min_ball_dist", "min_path_dist", "rim_hits", "ik_fails"]
+
+class PPO_Hoop(object):
     def __init__(self, env, output_dif, full_config):
         self.rank = -1
         self.device = full_config['rl_device']
@@ -25,13 +30,9 @@ class PPO_Track(object):
         self.env = env
         self.num_actors = int(self.ppo_config['num_actors'])
         print("num_actors: ", self.num_actors)
-        self.actions_num = self.env.call("act_t_dim")[0]
+        self.actions_num = self.env.call("act_dim")[0]
         print("actions_num: ", self.actions_num)
-        self.actions_low = self.env.call("actions_low")[0]
-        self.actions_high = self.env.call("actions_high")[0]
-        # self.obs_shape = self.env.observation_space.shape
-        self.obs_shape = (self.env.call("obs_t_dim")[0],)
-        self.full_action_dim = self.env.call("act_c_dim")[0]
+        self.obs_shape = (self.env.call("obs_dim")[0],)
         # ---- Model ----
         net_config = {
             'actor_units': self.network_config.mlp.units,
@@ -58,8 +59,6 @@ class PPO_Track(object):
             self.model.parameters(), self.init_lr, eps=1e-5)
         # ---- PPO Train Param ----
         self.e_clip = self.ppo_config['e_clip']
-        self.action_track_denorm = self.ppo_config['action_track_denorm']
-        self.action_catch_denorm = self.ppo_config['action_catch_denorm']
         self.clip_value = self.ppo_config['clip_value']
         self.entropy_coef = self.ppo_config['entropy_coef']
         self.critic_coef = self.ppo_config['critic_coef']
@@ -99,10 +98,10 @@ class PPO_Track(object):
 
         self.episode_rewards = AverageScalarMeter(200)
         self.episode_lengths = AverageScalarMeter(200)
-        self.episode_success = AverageScalarMeter(200)
+        self.episode_stats = {k: AverageScalarMeter(200) for k in EPISODE_STATS + ['outcome/' + n for n in OUTCOME_NAMES[1:]]}
         self.episode_test_rewards = AverageScalarMeter(self.ppo_config['test_num_episodes'])
         self.episode_test_lengths = AverageScalarMeter(self.ppo_config['test_num_episodes'])
-        self.episode_test_success = AverageScalarMeter(self.ppo_config['test_num_episodes'])
+        self.episode_test_stats = {k: AverageScalarMeter(self.ppo_config['test_num_episodes']) for k in EPISODE_STATS + ['outcome/' + n for n in OUTCOME_NAMES[1:]]}
 
         self.obs = None
         self.epoch_num = 0
@@ -194,19 +193,19 @@ class PPO_Track(object):
 
             mean_rewards = self.episode_rewards.get_mean()
             mean_lengths = self.episode_lengths.get_mean()
-            mean_success = self.episode_success.get_mean()
+            mean_success = self.episode_stats['success'].get_mean()
             # print("mean_rewards: ", mean_rewards)
-            self.writer.add_scalar(
-                'metrics/episode_rewards_per_step', mean_rewards, self.agent_steps)
-            self.writer.add_scalar(
-                'metrics/episode_lengths_per_step', mean_lengths, self.agent_steps)
-            self.writer.add_scalar(
-                'metrics/episode_success_per_step', mean_success, self.agent_steps)
-            wandb.log({
+            log_dict = {
                 'metrics/episode_rewards_per_step': mean_rewards,
                 'metrics/episode_lengths_per_step': mean_lengths,
                 'metrics/episode_success_per_step': mean_success,
-            }, step=self.agent_steps)
+            }
+            for k, meter in self.episode_stats.items():
+                if k != 'success':
+                    log_dict[f'episode/{k}'] = meter.get_mean()
+            for k, v in log_dict.items():
+                self.writer.add_scalar(k, v, self.agent_steps)
+            wandb.log(log_dict, step=self.agent_steps)
             checkpoint_name = f'ep_{self.epoch_num}_step_{int(self.agent_steps // 1e6):04}m_reward_{mean_rewards:.2f}'
 
             if self.save_freq > 0:
@@ -231,9 +230,6 @@ class PPO_Track(object):
     def save(self, name):
         weights = {
             'model': self.model.state_dict(),
-            'tracking_mlp': self.model.actor_mlp.state_dict(),
-            'tracking_mu': self.model.mu.state_dict(),
-            'tracking_sigma': self.model.sigma.data
         }
         if self.running_mean_std:
             weights['running_mean_std'] = self.running_mean_std.state_dict()
@@ -346,41 +342,26 @@ class PPO_Track(object):
         return a_losses, c_losses, b_losses, entropies, kls
     
     def obs2tensor(self, obs):
-        # Map the step result to tensor
-        if self.env.call('task')[0] == 'Catching':
-            obs_array = np.concatenate((
-                        obs["base"]["v_lin_2d"], 
-                        obs["arm"]["ee_pos3d"], obs["arm"]["ee_quat"], obs["arm"]["ee_v_lin_3d"],
-                        obs["object"]["pos3d"], obs["object"]["v_lin_3d"], 
-                        obs["hand"],
-                        ), axis=1)
-        else:
-            obs_array = np.concatenate((
-                    obs["base"]["v_lin_2d"], 
-                    obs["arm"]["ee_pos3d"], obs["arm"]["ee_quat"], obs["arm"]["ee_v_lin_3d"],
-                    obs["object"]["pos3d"], obs["object"]["v_lin_3d"],
-                    # obs["hand"],# TODO: TEST
+        # Map the step result to tensor (dim = 35, the order must stay fixed for saved checkpoints)
+        obs_array = np.concatenate((
+                    obs["hoop"]["pos3d"], obs["hoop"]["axis3d"], obs["hoop"]["v_lin_3d"],
+                    obs["arm"]["joint_pos"], obs["arm"]["joint_vel"],
+                    obs["object"]["pos3d"], obs["object"]["v_lin_3d"], obs["object"]["rel_pos3d"],
+                    obs["prev_action"],
                     ), axis=1)
         obs_tensor = torch.tensor(obs_array, dtype=torch.float32).to(self.device)
         return obs_tensor
 
-    def action2dict(self, actions):
-        actions = actions.cpu().numpy()
-        # De-normalize the actions
-        if self.env.call('task')[0] == 'Tracking':
-            base_tensor = actions[:, :2] * self.action_track_denorm[0]
-            arm_tensor = actions[:, 2:5] * self.action_track_denorm[1]
-            hand_tensor = actions[:, 5:] * self.action_track_denorm[2]
-        else:
-            base_tensor = actions[:, :2] * self.action_catch_denorm[0]
-            arm_tensor = actions[:, 2:5] * self.action_catch_denorm[1]
-            hand_tensor = actions[:, 5:] * self.action_catch_denorm[2]
-        actions_dict = {
-            'arm': arm_tensor,
-            'base': base_tensor,
-            'hand': hand_tensor
-        }
-        return actions_dict
+    def update_episode_stats(self, infos, meters):
+        # The vector env resets finished envs automatically and moves their last info to infos["final_info"]
+        if "final_info" not in infos:
+            return
+        for i in np.nonzero(infos["_final_info"])[0]:
+            final_info = infos["final_info"][i]
+            for k in EPISODE_STATS:
+                meters[k].update(torch.tensor([float(final_info[k])]))
+            for outcome_id, name in enumerate(OUTCOME_NAMES[1:], start=1):
+                meters['outcome/' + name].update(torch.tensor([float(final_info["outcome"] == outcome_id)]))
 
     def model_act(self, obs_dict, inference=False):
         processed_obs = self.running_mean_std(obs_dict['obs'])
@@ -403,13 +384,9 @@ class PPO_Track(object):
             for k in ['actions', 'neglogpacs', 'values', 'mus', 'sigmas']:
                 self.storage.update_data(k, n, res_dict[k])
             # Do env step
-            # Clamp the actions of the action space
-            actions = res_dict['actions']
-            actions[:,:] = torch.clamp(actions[:,:], -1, 1)
-            actions = torch.nn.functional.pad(actions, (0, self.full_action_dim-actions.size(1)), value=0)
-            actions_dict = self.action2dict(actions)
-            # print("actions_dict: ", actions_dict)
-            obs, r, terminates, truncates, infos = self.env.step(actions_dict)
+            # Clamp the actions of the action space (the env scales them, see DcmmCfg.action_scale)
+            actions = torch.clamp(res_dict['actions'], -1, 1)
+            obs, r, terminates, truncates, infos = self.env.step(actions.cpu().numpy())
             # Map the obs
             self.obs = {'obs': self.obs2tensor(obs)}
             # Map the rewards
@@ -432,13 +409,8 @@ class PPO_Track(object):
             # print("done_indices: ", done_indices)
             self.episode_rewards.update(self.current_rewards[done_indices])
             self.episode_lengths.update(self.current_lengths[done_indices])
-            self.episode_success.update(torch.tensor(truncates, dtype=torch.float32, device=self.device)[done_indices])
             assert isinstance(infos, dict), 'Info Should be a Dict'
-            # print("infos: ", infos)
-            for k, v in infos.items():
-                # only log scalars
-                if isinstance(v, float) or isinstance(v, int) or (isinstance(v, torch.Tensor) and len(v.shape) == 0):
-                    self.extra_info[k] = v
+            self.update_episode_stats(infos, self.episode_stats)
 
             not_dones = 1.0 - self.dones.float()
 
@@ -467,11 +439,8 @@ class PPO_Track(object):
             res_dict = self.model_act(self.obs, inference=True)
             # Do env step
             # Clamp the actions of the action space 
-            actions = res_dict['actions']
-            actions[:,:] = torch.clamp(actions[:,:], -1, 1)
-            actions = torch.nn.functional.pad(actions, (0, self.full_action_dim-actions.size(1)), value=0)
-            actions_dict = self.action2dict(actions)
-            obs, r, terminates, truncates, infos = self.env.step(actions_dict)
+            actions = torch.clamp(res_dict['actions'], -1, 1)
+            obs, r, terminates, truncates, infos = self.env.step(actions.cpu().numpy())
             # Map the obs
             self.obs = {'obs': self.obs2tensor(obs)}
             # Map the rewards
@@ -486,12 +455,8 @@ class PPO_Track(object):
             done_indices = self.dones.nonzero(as_tuple=False)
             self.episode_test_rewards.update(self.current_rewards[done_indices])
             self.episode_test_lengths.update(self.current_lengths[done_indices])
-            self.episode_test_success.update(torch.tensor(truncates, dtype=torch.float32, device=self.device)[done_indices])
             assert isinstance(infos, dict), 'Info Should be a Dict'
-            for k, v in infos.items():
-                # only log scalars
-                if isinstance(v, float) or isinstance(v, int) or (isinstance(v, torch.Tensor) and len(v.shape) == 0):
-                    self.extra_info[k] = v
+            self.update_episode_stats(infos, self.episode_test_stats)
 
             not_dones = 1.0 - self.dones.float()
 
@@ -509,14 +474,15 @@ class PPO_Track(object):
 
         while self.test_steps < self.max_test_steps:
             self.play_test_steps()
+            self.test_steps += self.batch_size
             self.storage.data_dict = None
             mean_rewards = self.episode_test_rewards.get_mean()
             mean_lengths = self.episode_test_lengths.get_mean()
-            mean_success = self.episode_test_success.get_mean()
             print("## Sample Length %d ##" % len(self.episode_test_rewards))
             print("mean_rewards: ", mean_rewards)
             print("mean_lengths: ", mean_lengths)
-            print("mean_success: ", mean_success)
+            for k, meter in self.episode_test_stats.items():
+                print("mean_{}: {:.3f}".format(k, meter.get_mean()))
             # wandb.log({
             #     'metrics/episode_test_rewards': mean_rewards,
             #     'metrics/episode_test_lengths': mean_lengths,

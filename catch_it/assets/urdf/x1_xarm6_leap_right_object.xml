@@ -70,7 +70,7 @@
             <!-- <camera name="top" mode="fixed" pos="0.0 -0.2 1.35" axisangle="1 0 0 1.1781" fovy="57"/> -->
             <!-- <inertial pos="-6.02831e-07 -0.0223905 0.321403" quat="0.992142 0.125073 -0.000252354 0.00339089" mass="15.599" diaginertia="1.58491 1.43052 0.656422" /> -->
             <inertial pos="0.000 -0.02 0.00" quat="0.492347 0.507724 -0.508707 0.490946" mass="100" diaginertia="2.54702 1.91073 1.14066" />
-            <joint name="dummy_joint" type="free" />
+            <!-- No joint: the mobile base is welded to the world (fixed-base hoop catching) -->
             <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="base_link" />
             <geom name="ranger_base" type="mesh" rgba="1 1 1 1" mesh="base_link" />
             <geom pos="-0.0244824 -0.37251 0.279423" quat="0 0 0.710185 0.704015" type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="Box_Link" />
@@ -109,48 +109,40 @@
             </body>
             <body name="Suspension1_Link" pos="-0.182 -0.245893 0.12045" quat="0.99999 -0.00436331 0 0">
                 <inertial pos="0.0562358 0.0136672 -0.0689303" quat="0.480602 -0.109201 -0.000258328 0.870113" mass="0.258645" diaginertia="0.000990911 0.000881135 0.000289082" />
-                <joint name="steer_rl" pos="0 0 0" axis="0 0 1" />
                 <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="Suspension1_Link" />
                 <geom type="mesh" rgba="1 1 1 1" mesh="Suspension1_Link" />
                 <body name="Wheel1_Link" pos="-0.0208 0.00194295 -0.129803" quat="0.99999 0.00436331 0 0">
                     <inertial pos="0.0204393 3.33773e-08 1.33779e-07" quat="0.939607 -0.342254 1.613e-06 -5.8754e-07" mass="1.15818" diaginertia="0.00501965 0.00272122 0.00272119" />
-                    <joint name="drive_rl" pos="0 0 0" axis="-1 0 0" />
                     <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="0.2 0.2 0.2 1" mesh="Wheel1_Link" />
                     <geom name="Wheel1" size="0.0935 0.026" pos="0.0185 0 0" quat="0.707107 0 0.707107 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
                 </body>
             </body>
             <body name="Suspension2_Link" pos="0.182 -0.245893 0.12045" quat="0.99999 -0.00436331 0 0">
                 <inertial pos="-0.0562389 0.0136676 -0.0689297" quat="0.870112 0.000253454 0.109184 0.480608" mass="0.25865" diaginertia="0.000990936 0.000881147 0.000289094" />
-                <joint name="steer_rr" pos="0 0 0" axis="0 0 1" />
                 <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="Suspension2_Link" />
                 <geom type="mesh" rgba="1 1 1 1" mesh="Suspension2_Link" />
                 <body name="Wheel2_Link" pos="0.021 0.00194295 -0.129803" quat="0.99999 0.00436331 0 0">
                     <inertial pos="-0.020454 -1.01629e-07 -8.15539e-08" quat="0.647155 0.762358 -5.50799e-07 -1.71001e-06" mass="1.15757" diaginertia="0.00501676 0.0027194 0.00271938" />
-                    <joint name="drive_rr" pos="0 0 0" axis="-1 0 0" />
                     <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="0.2 0.2 0.2 1" mesh="Wheel2_Link" />
                     <geom name="Wheel2" size="0.0935 0.026" pos="-0.0185 0 0" quat="0.707107 0 0.707107 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
                 </body>
             </body>
             <body name="Suspension3_Link" pos="-0.182 0.248088 0.116139" quat="0.99999 -0.00436331 0 0">
                 <inertial pos="0.0562389 -0.0136676 -0.0689297" quat="0.870112 -0.000253455 -0.109184 0.480608" mass="0.25865" diaginertia="0.000990936 0.000881147 0.000289094" />
-                <joint name="steer_fl" pos="0 0 0" axis="0 0 1" />
                 <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="Suspension3_Link" />
                 <geom type="mesh" rgba="1 1 1 1" mesh="Suspension3_Link" />
                 <body name="Wheel3_Link" pos="-0.021 -0.00194295 -0.129803" quat="0.99999 0.00436331 0 0">
                     <inertial pos="0.0204393 1.37873e-07 9.92524e-09" quat="0.829205 0.558944 -1.42423e-06 -9.60032e-07" mass="1.15818" diaginertia="0.00501965 0.00272122 0.00272119" />
-                    <joint name="drive_fl" pos="0 0 0" axis="-1 0 0" />
                     <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="0.2 0.2 0.2 1" mesh="Wheel3_Link" />
                     <geom name="Wheel3" size="0.0935 0.026" pos="0.0185 0 0" quat="0.707107 0 0.707107 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
                 </body>
             </body>
             <body name="Suspension4_Link" pos="0.182 0.248088 0.116139" quat="0.99999 -0.00436331 0 0">
                 <inertial pos="-0.0563063 -0.0136807 -0.0689934" quat="0.434721 0.121652 -0.0192069 0.892104" mass="0.258387" diaginertia="0.00100741 0.000933733 0.000328543" />
-                <joint name="steer_fr" pos="0 0 0" axis="0 0 1" />
                 <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="1 1 1 1" mesh="Suspension4_Link" />
                 <geom type="mesh" rgba="1 1 1 1" mesh="Suspension4_Link" />
                 <body name="Wheel4_Link" pos="0.021 -0.00194295 -0.129803" quat="0.99999 0.00436331 0 0">
                     <inertial pos="-0.020454 -1.09626e-07 6.94701e-08" quat="0.969649 0.244501 -1.61246e-06 -4.06588e-07" mass="1.15757" diaginertia="0.00501676 0.0027194 0.00271938" />
-                    <joint name="drive_fr" pos="0 0 0" axis="-1 0 0" />
                     <geom type="mesh" contype="0" conaffinity="0" group="1" rgba="0.2 0.2 0.2 1" mesh="Wheel4_Link" />
                     <geom name="Wheel4" size="0.0935 0.026" pos="-0.0185 0 0" quat="0.707107 0 0.707107 0" type="cylinder" rgba="0.2 0.2 0.2 1" />
                 </body>
@@ -199,15 +191,20 @@
                                         <site name="hoop_center" pos="0 0 0.17" size="0.01" group="3" rgba="0 1 0 0.5" />
                                         <geom name="hoop_mount" type="cylinder" size="0.04 0.01" pos="0 0 0.01" rgba="0.3 0.3 0.3 1" />
                                         <geom name="hoop_floor" type="cylinder" size="0.058 0.004" pos="0 0 0.024" rgba="0.95 0.95 0.95 1" />
-                                        <replicate count="12" euler="0 0 0.5235988">
-                                            <geom type="capsule" fromto="0.05 0 0.024 0.133 0 0.17" size="0.005" rgba="0.95 0.95 0.95 1" />
-                                        </replicate>
-                                        <replicate count="16" euler="0 0 0.3926991">
-                                            <geom type="capsule" fromto="0.0915 -0.0182 0.097 0.0915 0.0182 0.097" size="0.004" rgba="0.95 0.95 0.95 1" />
-                                        </replicate>
-                                        <replicate count="24" euler="0 0 0.2617994">
-                                            <geom type="capsule" fromto="0.133 -0.0175 0.17 0.133 0.0175 0.17" size="0.008" rgba="1 0.45 0 1" />
-                                        </replicate>
+                                        <!-- Net and rim live in their own (jointless) bodies so the env can tell rim hits from net hits by body id -->
+                                        <body name="hoop_net">
+                                            <replicate count="12" euler="0 0 0.5235988">
+                                                <geom type="capsule" fromto="0.05 0 0.024 0.133 0 0.17" size="0.005" rgba="0.95 0.95 0.95 1" />
+                                            </replicate>
+                                            <replicate count="16" euler="0 0 0.3926991">
+                                                <geom type="capsule" fromto="0.0915 -0.0182 0.097 0.0915 0.0182 0.097" size="0.004" rgba="0.95 0.95 0.95 1" />
+                                            </replicate>
+                                        </body>
+                                        <body name="hoop_rim">
+                                            <replicate count="24" euler="0 0 0.2617994">
+                                                <geom type="capsule" fromto="0.133 -0.0175 0.17 0.133 0.0175 0.17" size="0.008" rgba="1 0.45 0 1" />
+                                            </replicate>
+                                        </body>
                                     </body>
                                 </body>
                             </body>
@@ -217,35 +214,16 @@
             </body>
         </body>
         <body name="object" pos="0.4 1.25 1.2">
-            <inertial pos="0.0 0 0" quat="1 0.0 -0.0 -0.0" mass="0.25" diaginertia="0.0004225 0.0004225 0.0004225" />
-            <joint name='object' type='free' damping="0.1" />
-            <!-- Training Objects -->
-            <geom name='object' type="sphere" size="0.065" solimp="0.998 0.998 0.001" solref="0.001 1" density="100" friction="0.95 0.3 0.1" rgba="1.0 0.0 0.0 1" group="0" condim="4"/>
-            <!-- Evaluation Objects -->
-            <!-- <geom name='object' mesh="bread_mesh" type="mesh" solimp="0.998 0.998 0.001" solref="0.001 1" density="50" friction="0.95 0.3 0.1" group="0" condim="4"/> -->
+            <inertial pos="0.0 0 0" quat="1 0.0 -0.0 -0.0" mass="0.05" diaginertia="0.0004225 0.0004225 0.0004225" />
+            <joint name='object' type='free' damping="0.0" />
+            <!-- Ball: size, mass and damping are re-randomized from DcmmCfg on every env init -->
+            <geom name='object' type="sphere" size="0.04" solimp="0.998 0.998 0.001" solref="0.001 1" density="100" friction="0.95 0.3 0.1" rgba="1.0 0.0 0.0 1" group="0" condim="4"/>
         </body>
     </worldbody>
     <contact>
-        <pair name = "floor_wheel_1" geom1 = "floor" geom2 = "Wheel1" friction = "1.1 1.1 0.005 0.0001 0.0001"/>
-        <pair name = "floor_wheel_2" geom1 = "floor" geom2 = "Wheel2" friction = "1.1 1.1 0.005 0.0001 0.0001"/>
-        <pair name = "floor_wheel_4" geom1 = "floor" geom2 = "Wheel4" friction = "1.1 1.1 0.005 0.0001 0.0001"/>
-        <pair name = "floor_wheel_3" geom1 = "floor" geom2 = "Wheel3" friction = "1.1 1.1 0.005 0.0001 0.0001"/>
-        <exclude name = "exclude_body_wheel_1" body1="base_link" body2="Wheel1_Link" />
-        <exclude name = "exclude_body_wheel_2" body1="base_link" body2="Wheel2_Link" />
-        <exclude name = "exclude_body_wheel_3" body1="base_link" body2="Wheel3_Link" />
-        <exclude name = "exclude_body_wheel_4" body1="base_link" body2="Wheel4_Link" />
         <exclude name = "exclude_hoop_link5" body1="hoop" body2="link5" />
     </contact>
     <actuator>
-        <!-- base actuators -->
-        <motor name="base_sfl" joint="steer_fl" ctrlrange="-7.5 7.5" />
-        <motor name="base_sfr" joint="steer_fr" ctrlrange="-7.5 7.5" />
-        <motor name="base_srl" joint="steer_rl" ctrlrange="-7.5 7.5" />
-        <motor name="base_srr" joint="steer_rr" ctrlrange="-7.5 7.5" />
-        <motor name="base_dfl" joint="drive_fl" ctrlrange="-40.19 40.19" />
-        <motor name="base_dfr" joint="drive_fr" ctrlrange="-40.19 40.19" />
-        <motor name="base_drl" joint="drive_rl" ctrlrange="-40.19 40.19" />
-        <motor name="base_drr" joint="drive_rr" ctrlrange="-40.19 40.19" />
         <!-- xarm actuators -->
         <motor name="arm_actuator_1" joint="joint1" ctrlrange="-100 100" />
         <motor name="arm_actuator_2" joint="joint2" ctrlrange="-100 100" />

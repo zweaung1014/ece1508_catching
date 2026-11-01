@@ -9,9 +9,7 @@ from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 from termcolor import cprint
 from gym_dcmm.utils.util import omegaconf_to_dict
-from gym_dcmm.algs.ppo_dcmm.ppo_dcmm_catch_two_stage import PPO_Catch_TwoStage
-from gym_dcmm.algs.ppo_dcmm.ppo_dcmm_catch_one_stage import PPO_Catch_OneStage
-from gym_dcmm.algs.ppo_dcmm.ppo_dcmm_track import PPO_Track
+from gym_dcmm.algs.ppo_dcmm.ppo_dcmm_hoop import PPO_Hoop
 import gymnasium as gym
 import gym_dcmm
 import datetime
@@ -24,14 +22,11 @@ def main(config: DictConfig):
     torch.multiprocessing.set_start_method('spawn')
     config.test = config.test
     model_path = None
-    if config.task == 'Tracking' and config.checkpoint_tracking:
-        config.checkpoint_tracking = to_absolute_path(config.checkpoint_tracking)
-        model_path = config.checkpoint_tracking
-    elif (config.task == 'Catching_TwoStage' \
-        or config.task == 'Catching_OneStage') \
-        and config.checkpoint_catching:
-        config.checkpoint_catching = to_absolute_path(config.checkpoint_catching)
-        model_path = config.checkpoint_catching
+    if config.task != 'HoopCatch':
+        raise ValueError("Invalid task: {}".format(config.task))
+    if config.checkpoint:
+        config.checkpoint = to_absolute_path(config.checkpoint)
+        model_path = config.checkpoint
 
     # use the device for rl
     config.rl_device = f'cuda:{config.device_id}' if config.device_id >= 0 else 'cpu'
@@ -40,18 +35,16 @@ def main(config: DictConfig):
     cprint('Start Building the Environment', 'green', attrs=['bold'])
     # Create and wrap the environment
     env_name = 'gym_dcmm/DcmmVecWorld-v0'
-    task = 'Tracking' if config.task == 'Tracking' else 'Catching'
     print("config.num_envs: ", config.num_envs)
     env = gym.make_vec(env_name, num_envs=int(config.num_envs), 
-                    task=task, camera_name=["top"],
+                    task=config.task, camera_name=["top"],
                     render_per_step=False, render_mode = "rgb_array",
                     object_name = "object",
-                    img_size = config.train.ppo.img_dim,
                     imshow_cam = config.imshow_cam, 
                     viewer = config.viewer,
                     print_obs = False, print_info = False,
                     print_reward = False, print_ctrl = False,
-                    print_contacts = False, object_eval = config.object_eval,
+                    print_contacts = False,
                     env_time = 2.5, steps_per_policy = 20)
 
     output_dif = os.path.join('outputs', config.output_name)
@@ -62,10 +55,7 @@ def main(config: DictConfig):
     output_dif = os.path.join(output_dif, current_datetime_str)
     os.makedirs(output_dif, exist_ok=True)
 
-    PPO = PPO_Track if config.task == 'Tracking' else \
-          PPO_Catch_TwoStage if config.task == 'Catching_TwoStage' else \
-          PPO_Catch_OneStage
-    agent = PPO(env, output_dif, full_config=config)
+    agent = PPO_Hoop(env, output_dif, full_config=config)
 
     cprint('Start Training/Testing the Agent', 'green', attrs=['bold'])
     if config.test:

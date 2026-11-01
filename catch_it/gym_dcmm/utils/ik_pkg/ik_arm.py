@@ -207,12 +207,16 @@ def timing(func):
     return wrap
 
 class QP(IK):
-    def __init__(self, name="QP", λj=1.0, λs=1.0, **kwargs):
+    def __init__(self, name="QP", λj=1.0, λs=1.0, free_ee_z_rot=False, gain=2.0, **kwargs):
         super().__init__(name, **kwargs)
 
         self.name = f"QP (λj={λj}, λs={λs})"
         self.λj = λj
         self.λs = λs
+        # Ignore the orientation error about the end-effector z axis (e.g. a symmetric hoop)
+        self.free_ee_z_rot = free_ee_z_rot
+        # Fraction of the error removed per iteration (> 1 overshoots and can oscillate around the solution)
+        self.gain = gain
 
         if self.λΣ > 0.0:
             self.name += ' Σ'
@@ -235,6 +239,11 @@ class QP(IK):
         # exit(1)
         # Calculate the error
         e, E = self.error(Te, Tep)
+        if self.free_ee_z_rot:
+            # Project out the rotation about the current ee z axis from the error
+            P_z = np.eye(3) - np.outer(Te[:3, 2], Te[:3, 2])
+            e[3:] = P_z @ e[3:]
+            E = 0.5 * e @ self.We @ e
         if E < self.tol and i <= 1:
             # print("NO NEED to calculate IK!!!!!!!!!!!!!")
             # data.qpos[:] = q[:]
@@ -243,7 +252,10 @@ class QP(IK):
         # Calculate the Jacobian
         jacp = np.zeros((3, model.nv))
         jacr = np.zeros((3, model.nv))
-        mujoco.mj_jacBodyCom(model, data, jacp, jacr, model.body("link6").id)
+        # Jacobian of the link6 frame origin, which is the point the position error is measured at
+        mujoco.mj_jacBody(model, data, jacp, jacr, model.body("link6").id)
+        if self.free_ee_z_rot:
+            jacr = P_z @ jacr
         J = np.concatenate((jacp, jacr), axis=0)
         # print("J: \n", J)
         # Quadratic component of objective function
@@ -257,7 +269,7 @@ class QP(IK):
 
         # The equality contraints
         Aeq = np.concatenate((J, np.eye(6)), axis=1)
-        beq = 2*e.reshape((6,))
+        beq = self.gain*e.reshape((6,))
 
         # The inequality constraints for joint limit avoidance
         if self.λΣ > 0.0:
@@ -429,9 +441,9 @@ class LM_Chan(IK):
         return E, q
 
 class IKArm:
-    def __init__(self, solver_type='QP', ps=0.001, λΣ=10, λj=0.1, λs=1.0, λ=0.1, tol=2e-3, ilimit=100):
+    def __init__(self, solver_type='QP', ps=0.001, λΣ=10, λj=0.1, λs=1.0, λ=0.1, tol=2e-3, ilimit=100, free_ee_z_rot=False, gain=2.0):
         if solver_type=='QP':
-            self.solver = QP(λj=λj, λs=λs, ps=ps, λΣ=λΣ, tol=tol, ilimit=ilimit)
+            self.solver = QP(λj=λj, λs=λs, ps=ps, λΣ=λΣ, tol=tol, ilimit=ilimit, free_ee_z_rot=free_ee_z_rot, gain=gain)
         elif solver_type=='LM_Chan':
             self.solver = LM_Chan(λ=λ, ps=ps, λΣ=λΣ, tol=tol, ilimit=ilimit)
         else:
