@@ -1,4 +1,4 @@
-"""Installation script for the 'isaacgymenvs' python package."""
+"""Installation script for the gym_dcmm package (HoopCatch). Adapted from Catch It (MIT License)."""
 
 from __future__ import absolute_import
 from __future__ import print_function
@@ -19,7 +19,7 @@ INSTALL_REQUIRES = [
 # Installation operation
 setup(
     name="gym_dcmm",
-    author="Yuanhang Zhang",
+    author="Zwe Min Htet Aung",
     version="0.0.1",
     description="Mujoco Environment for Dexterous Catch with Mobile Manipulation (DCMM).",
     keywords=["robotics", "rl"],
