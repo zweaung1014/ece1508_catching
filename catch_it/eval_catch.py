@@ -1,8 +1,10 @@
 """
 Author: Zwe Min Htet Aung
 ABOUT: evaluate any HoopCatch controller on a fixed list of seeds, so every controller faces exactly the
-same throws (same seed -> same throw, ball, gravity, PID gains and noise sequence).
-Writes one CSV row per episode, plus a JSON file with the run settings.
+same throws (same seed -> same throw, ball, disturbances, PID gains and noise sequence).
+The env runs as configured in DcmmCfg; every throw draws its own velocity-noise std, drag and action
+delay, and each CSV row logs the values it got. Writes one CSV row per episode, plus a JSON file with
+the run settings (env and catcher config, git commit).
 
 Controllers:
   random            untrained-policy stand-in: N(0, 1) actions, clipped
@@ -10,17 +12,14 @@ Controllers:
   rl                a PPO checkpoint, mean action (needs --checkpoint)
   classical_single  parabola from one read after release, open loop on the ball
   classical_multi   parabola re-fitted to every read, re-planned every step
-  classical_perfect diagnostic: parabola from the true release state and gravity
-
-Conditions (change the simulator only, see CONDITIONS): nominal, noise_x2, noise_x4, tracker_noise,
-gravity_fixed, delay_1, delay_2.
+  classical_perfect diagnostic: path from the true release state, gravity and drag
 
 Usage (from catch_it/, env active):
-  python eval_catch.py --controller classical_multi                       # test seeds 10000-10999
-  python eval_catch.py --controller rl --checkpoint outputs/<run>/nn/best.pth
-  python eval_catch.py --controller oracle --condition noise_x2 --seeds 0:500
-  python eval_catch.py --controller classical_single --seeds 10000:10010 --viewer --workers 1
-Output: results/<condition>/<controller>[_<tag>].csv and .json
+  python eval_catch.py --exp exp02_randomized --controller classical_multi     # test seeds 10000-14999
+  python eval_catch.py --exp exp02_randomized --controller rl --checkpoint outputs/<run>/nn/best.pth
+  python eval_catch.py --exp scratch --controller oracle --seeds 0:500          # validation seeds
+  python eval_catch.py --exp scratch --controller classical_single --seeds 10000:10010 --viewer --workers 1
+Output: results/<exp>/<controller>[_<tag>].csv and .json
 """
 import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -39,19 +38,7 @@ import configs.env.DcmmCfg as DcmmCfg
 import configs.env.ClassicalCfg as ClassicalCfg
 
 CONTROLLERS = ["random", "oracle", "rl", "classical_single", "classical_multi", "classical_perfect"]
-# Simulator changes per test condition (DcmmCfg attribute -> value). Values are relative to the defaults.
-CONDITIONS = {
-    "nominal": {},
-    "noise_x2": {"k_obs_object": 2 * DcmmCfg.k_obs_object, "k_obs_object_vel": 2 * DcmmCfg.k_obs_object_vel},
-    "noise_x4": {"k_obs_object": 4 * DcmmCfg.k_obs_object, "k_obs_object_vel": 4 * DcmmCfg.k_obs_object_vel},
-    # Velocity noise of a tracker that differences its own 5 mm-noise positions at 25 Hz (~0.18 m/s)
-    "tracker_noise": {"k_obs_object_vel": 0.18},
-    "gravity_fixed": {"gravity_noise": 0.0},
-    # Extra control steps (40 ms each) before a new joint target reaches the PID; nominal is [1] = none
-    "delay_1": {"act_delay": {"arm": [2]}},
-    "delay_2": {"act_delay": {"arm": [3]}},
-}
-TEST_SEEDS = (10000, 11000)
+TEST_SEEDS = (10000, 15000)
 OUTCOME_NAMES = ["none", "catch", "ball_floor", "ball_robot", "collision", "timeout"]
 
 
@@ -127,7 +114,8 @@ class ClassicalController:
         privileged = None
         if self.mode == "perfect_state" and env.throw_time is not None:
             privileged = {"p0": env.object_pos3d - env.arm_base_pos, "v0": env.object_vel6d[:3].copy(),
-                          "g": -env.Dcmm.model.opt.gravity[2], "t_throw": env.throw_time}
+                          "g": -env.Dcmm.model.opt.gravity[2], "k": env.object_damping / env.object_mass,
+                          "t_throw": env.throw_time}
         return self.catcher.act(obs, privileged)
 
 
@@ -143,12 +131,7 @@ def make_controller(name, checkpoint):
 
 
 # ---------------------------------------------------------------------------- episodes
-def apply_condition(condition):
-    for k, v in CONDITIONS[condition].items():
-        setattr(DcmmCfg, k, v)
-
-
-def run_episode(env, ctrl, seed, controller_name, condition):
+def run_episode(env, ctrl, seed, controller_name):
     obs, info = env.reset(seed=seed)
     ctrl.reset(env, seed)
     dt = 1.0 / env.fps
@@ -169,13 +152,21 @@ def run_episode(env, ctrl, seed, controller_name, condition):
     hoop = np.array(hoop)
 
     # Throw (privileged, for analysis only)
+    from gym_dcmm.classical.ballistic import DragPath
     launch = env.object_pos3d - env.arm_base_pos
     v0 = env.object_vel6d[:3].copy()
     g = -env.Dcmm.model.opt.gravity[2]
+    drag_rate = env.object_damping / env.object_mass       # 1/s; speed decays as exp(-drag_rate t)
     target = env.throw_target
     v_arr = env.throw_arrival_vel
+    # How far the drag carried the true path from the aim point (closest approach)
+    ts = np.linspace(0.0, 1.5 * env.throw_flight_time, 301)
+    aim_miss = float(np.min(np.linalg.norm(DragPath(launch, v0, 0.0, g, drag_rate).position(ts) - target, axis=1)))
     row = {
-        "seed": seed, "controller": controller_name, "condition": condition,
+        "seed": seed, "controller": controller_name,
+        # Per-throw disturbances
+        "vel_noise_std": env.k_obs_object_vel, "drag_b": env.object_damping, "drag_rate": drag_rate,
+        "act_delay_steps": env.act_delay_steps, "aim_miss": aim_miss,
         "outcome": OUTCOME_NAMES[info["outcome"]], "success": int(info["success"]),
         "steps": steps, "episode_time": round(info["env_time"], 4), "return": ret,
         "min_ball_dist": info["min_ball_dist"], "min_path_dist": info["min_path_dist"],
@@ -199,8 +190,7 @@ def run_episode(env, ctrl, seed, controller_name, condition):
             "feasible", "in_region", "g_hat", "pred_err", "pred_err_perp", "hoop_err_at_tstar", "axis_err_at_tstar_deg"]
     row.update({k: np.nan for k in keys})
     if log is not None and env.throw_time is not None and not np.isnan(log["t_star"]):
-        from gym_dcmm.classical.ballistic import Parabola
-        truth = Parabola(launch, v0, env.throw_time, g)
+        truth = DragPath(launch, v0, env.throw_time, g, drag_rate)   # the ball's true path, drag included
         t_star = log["t_star"]
         p_true = truth.position(t_star)
         d_true = truth.direction(t_star)
@@ -224,20 +214,19 @@ def run_episode(env, ctrl, seed, controller_name, condition):
 _W = {}
 
 
-def _init_worker(controller, condition, checkpoint, viewer):
+def _init_worker(controller, checkpoint, viewer):
     import contextlib, io
-    apply_condition(condition)
     with contextlib.redirect_stdout(io.StringIO()):   # the env and the normalizer print on construction
         from gym_dcmm.envs.DcmmVecEnv import DcmmVecEnv
         _W["env"] = DcmmVecEnv(task="HoopCatch", object_name="object", render_per_step=False, viewer=viewer,
                                imshow_cam=False, camera_name=["top"], render_mode="rgb_array",
                                env_time=2.5, steps_per_policy=20)
         _W["ctrl"] = make_controller(controller, checkpoint)
-    _W["controller"], _W["condition"] = controller, condition
+    _W["controller"] = controller
 
 
 def _run_chunk(seeds):
-    return [run_episode(_W["env"], _W["ctrl"], s, _W["controller"], _W["condition"]) for s in seeds]
+    return [run_episode(_W["env"], _W["ctrl"], s, _W["controller"]) for s in seeds]
 
 
 def parse_seeds(text):
@@ -256,12 +245,30 @@ def git_info():
         return "unknown", True
 
 
+def _jsonable(v):
+    if isinstance(v, np.ndarray):
+        return v.tolist()
+    if isinstance(v, np.generic):
+        return v.item()
+    if isinstance(v, dict):
+        return {str(k): _jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_jsonable(x) for x in v]
+    return v
+
+
+def cfg_dict(module):
+    """The numeric settings of a config module (paths and imports left out)."""
+    return {k: _jsonable(v) for k, v in vars(module).items()
+            if not k.startswith("_") and isinstance(v, (int, float, bool, np.ndarray, dict, list))}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate a HoopCatch controller on fixed seeds")
     parser.add_argument("--controller", required=True, choices=CONTROLLERS)
-    parser.add_argument("--condition", default="nominal", choices=list(CONDITIONS))
+    parser.add_argument("--exp", required=True, help="experiment name; results go to <out_dir>/<exp>/")
     parser.add_argument("--seeds", default="{}:{}".format(*TEST_SEEDS),
-                        help="a:b (range) or a,b,c. Test set 10000:11000, validation 0:500")
+                        help="a:b (range) or a,b,c. Test set 10000:15000, validation 0:500")
     parser.add_argument("--checkpoint", default="", help="PPO checkpoint (.pth) for --controller rl")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--viewer", action="store_true", help="watch in the MuJoCo viewer (forces --workers 1)")
@@ -274,13 +281,17 @@ def main():
         args.checkpoint = os.path.abspath(args.checkpoint)
     seeds = parse_seeds(args.seeds)
     workers = 1 if args.viewer else max(1, min(args.workers, len(seeds)))
+    commit, dirty = git_info()
+    if dirty:
+        print("WARNING: uncommitted changes; the .json cannot pin the code that made these results "
+              "(commit first for results you keep)", file=sys.stderr)
 
     t0 = time.time()
     rows = []
     if workers == 1:
-        _init_worker(args.controller, args.condition, args.checkpoint, args.viewer)
+        _init_worker(args.controller, args.checkpoint, args.viewer)
         for i, s in enumerate(seeds):
-            rows.append(run_episode(_W["env"], _W["ctrl"], s, args.controller, args.condition))
+            rows.append(run_episode(_W["env"], _W["ctrl"], s, args.controller))
             print("seed {}: {} | catch rate {:.3f} ({}/{})".format(
                 s, rows[-1]["outcome"], np.mean([r["success"] for r in rows]), i + 1, len(seeds)), flush=True)
     else:
@@ -288,14 +299,14 @@ def main():
         chunks = [list(c) for c in np.array_split(seeds, n_chunks) if len(c)]
         ctx = mp.get_context("spawn")
         with ctx.Pool(workers, initializer=_init_worker,
-                      initargs=(args.controller, args.condition, args.checkpoint, False)) as pool:
+                      initargs=(args.controller, args.checkpoint, False)) as pool:
             for chunk_rows in pool.imap_unordered(_run_chunk, chunks):
                 rows.extend(chunk_rows)
                 print("{}/{} episodes | catch rate {:.3f} | {:.0f} s".format(
                     len(rows), len(seeds), np.mean([r["success"] for r in rows]), time.time() - t0), flush=True)
     rows.sort(key=lambda r: r["seed"])
 
-    out_dir = os.path.join(args.out_dir, args.condition)
+    out_dir = os.path.join(args.out_dir, args.exp)
     os.makedirs(out_dir, exist_ok=True)
     name = args.controller + ("_" + args.tag if args.tag else "")
     csv_path = os.path.join(out_dir, name + ".csv")
@@ -303,22 +314,19 @@ def main():
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
-    commit, dirty = git_info()
     meta = {
-        "controller": args.controller, "condition": args.condition, "overrides": str(CONDITIONS[args.condition]),
+        "controller": args.controller, "exp": args.exp,
         "seeds": args.seeds, "episodes": len(rows), "checkpoint": args.checkpoint,
         "git_commit": commit, "git_dirty": dirty, "wall_time_s": round(time.time() - t0, 1),
         "catch_rate": float(np.mean([r["success"] for r in rows])),
-        "classical_cfg": {k: (v.tolist() if isinstance(v, np.ndarray) else
-                              {kk: vv.tolist() for kk, vv in v.items()} if isinstance(v, dict) else v)
-                          for k, v in vars(ClassicalCfg).items()
-                          if not k.startswith("_") and isinstance(v, (int, float, bool, np.ndarray, dict))},
+        "env_cfg": cfg_dict(DcmmCfg),
+        "classical_cfg": cfg_dict(ClassicalCfg),
     }
     with open(os.path.join(out_dir, name + ".json"), "w") as f:
         json.dump(meta, f, indent=2)
     outcomes = {n: sum(r["outcome"] == n for r in rows) for n in OUTCOME_NAMES[1:]}
     print("\n{} | {} | {} episodes | catch rate {:.3f} | {}".format(
-        args.controller, args.condition, len(rows), meta["catch_rate"], outcomes))
+        args.controller, args.exp, len(rows), meta["catch_rate"], outcomes))
     print("saved", csv_path)
 
 

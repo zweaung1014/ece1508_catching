@@ -10,7 +10,8 @@ A non-learning catcher to compare against the PPO policy. It predicts the ball's
 | The catcher: release detection, catch-point choice, servo | `catch_it/gym_dcmm/classical/catcher.py` |
 | All catcher settings | `catch_it/configs/env/ClassicalCfg.py` |
 | Evaluator for every controller (fixed seeds, one CSV row per episode) | `catch_it/eval_catch.py` |
-| Full test matrix (all controllers × all conditions) | `catch_it/run_eval_matrix.sh` |
+| Full test run (all controllers into `results/<exp>/`) | `catch_it/run_eval.sh` |
+| Results, one folder per experiment with a README of its settings | `catch_it/results/<exp>/` |
 | Tables: catch rate, CIs, paired tests, miss reasons, per-bin rates | `catch_it/analyze_results.py` |
 | Tests of the predictor (incl. against MuJoCo free flight) | `catch_it/tests/test_ballistic.py` |
 
@@ -58,7 +59,7 @@ Modes:
 - Same action interface as RL, so the same limits: 0.04 m and 0.1 rad per step (1 m/s, 2.5 rad/s), 0.15 m target lead, workspace box, IK, PID, action delay.
 - The reach region is a fixed setting, separate from the throw sampler's `DcmmCfg.catch_zone`. A much wider assumed region (0.25–0.8 m, ±70°, 0.15–0.95 m) still caught 200/200 validation throws, so the region does not leak the aim zone.
 - It never draws from `np.random`, so a seed gives the same throw and the same noise to every controller.
-- Settings were tuned on validation seeds 0–499 only. Test seeds 10000–10999 are for reporting.
+- Settings were tuned on validation seeds 0–499 only (in exp01's env). Test seeds 10000–14999 are for reporting.
 
 ## 4. Experiment
 
@@ -70,51 +71,53 @@ Modes:
 | `classical_single` | 1 noisy read | open-loop baseline |
 | `classical_multi` | all noisy reads | main classical baseline |
 | `rl` | all noisy reads | the method |
-| `classical_perfect` | true release state | diagnostic: planner + arm limits only |
+| `classical_perfect` | true release state, gravity and drag | diagnostic: planner + arm limits only |
 | `oracle` | aim point, known before release | privileged reference |
 
-**Conditions** (`eval_catch.py --condition`, simulator changes only; the catcher's assumptions stay fixed):
+**Test setting** (from exp02 on): one setting, with every disturbance drawn at random for each throw (ranges in `DcmmCfg.py`):
 
-| Condition | Change |
+| Disturbance | Per-throw draw |
 |---|---|
-| `nominal` | none |
-| `noise_x2`, `noise_x4` | ball position and velocity noise ×2, ×4 |
-| `tracker_noise` | velocity noise 0.18 m/s (a tracker differencing 5 mm positions at 25 Hz) |
-| `gravity_fixed` | gravity randomization off |
-| `delay_1`, `delay_2` | 1 or 2 extra control steps before a joint target takes effect |
+| Ball velocity obs noise | Gaussian, std 0.05–0.18 m/s |
+| Air drag | damping b 0–0.005 on the ball (up to ~13% speed lost per second for a 35 g ball); the throw is aimed without drag, so the ball falls a bit short |
+| Action delay | the arm follows the command from 0, 1 or 2 steps ago (0/40/80 ms) |
+| Gravity | fixed at 9.81 |
 
-Not yet implemented: ball drag. It needs `random_throw` to aim with drag so throws still land in the catch zone.
+The rest stays on as before: ball position noise 5 mm, arm/hoop obs noise, 2.5% torque noise, PID gain, ball size and mass randomization. The catcher's assumptions stay fixed (no drag, `vel_sigma` 0.05). Each CSV row logs the values its throw drew (`vel_noise_std`, `drag_b`, `drag_rate`, `act_delay_steps`, `aim_miss`). exp01 instead changed one factor per condition; see `catch_it/results/exp01_one_factor/README.md`.
 
-**Metrics** (`analyze_results.py`): catch rate with a 95% Wilson interval; paired exact McNemar tests on the same seeds; outcome breakdown; rim hits, IK failures, hoop travel, action smoothness; for the classical modes, prediction error across the true path at the planned catch time, hoop tracking error, and the reason for each miss (not reachable in time > prediction > arm tracking > other); catch rate by flight time, launch azimuth and home-to-target distance.
+**Metrics** (`analyze_results.py`): catch rate with a 95% Wilson interval; paired exact McNemar tests on the same seeds; outcome breakdown; rim hits, IK failures, hoop travel, action smoothness; for the classical modes, prediction error across the true (drag) path at the planned catch time, hoop tracking error, and the reason for each miss (not reachable in time > prediction > arm tracking > other); catch rate by velocity-noise std, drag, delay, flight time, launch azimuth and home-to-target distance. The disturbances are drawn independently, so each bin averages over the others.
 
 ## 5. Running it
 
 From `catch_it/` with the env active:
 
 ```bash
-python tests/test_ballistic.py                                   # predictor checks
-python eval_catch.py --controller classical_multi                # 1000 test throws, ~30 s with 16 workers
-python eval_catch.py --controller classical_single --seeds 10000:10010 --viewer --workers 1   # watch
-python eval_catch.py --controller rl --checkpoint outputs/<run>/nn/<file>.pth
-bash run_eval_matrix.sh                                          # everything; CHECKPOINT=... adds RL
-python analyze_results.py                                        # tables; --markdown results/summary.md
+python tests/test_ballistic.py                                   # predictor, drag and disturbance checks
+python eval_catch.py --exp scratch --controller classical_multi  # 5000 test throws, ~3 min with 16 workers
+python eval_catch.py --exp scratch --controller classical_single --seeds 10000:10010 --viewer --workers 1   # watch
+python eval_catch.py --exp scratch --controller rl --checkpoint outputs/<run>/nn/<file>.pth
+EXP=exp02_randomized bash run_eval.sh                            # everything; CHECKPOINT=... adds RL
+python analyze_results.py --exp exp02_randomized                 # tables; --markdown results/<exp>/summary.md
 ```
 
-Results go to `catch_it/results/<condition>/<controller>.csv`, with a `.json` next to each (seeds, git commit, catcher settings).
+Results go to `catch_it/results/<exp>/<controller>.csv`, with a `.json` next to each (seeds, git commit, full env and catcher settings). Commit the code before a run you keep, so the `.json` pins it. Each experiment folder gets a `README.md` saying what was varied.
 
 ## 6. Keeping RL and classical comparable
 
 For whoever trains the RL policy:
 
-- **Must match between the two branches:** the observation and its noise, the action interface (step sizes, 0.15 m lead, workspace box, IK settings, PID gains and their randomization, action delay, 25 Hz), the throw sampler (catch zone, launch zone, flight time, gravity and ball randomization), the catch test, the end-of-episode conditions and the 2.5 s limit. Make env changes where both branches pull from, and evaluate both on the same commit (the `.json` records it).
+- **Must match between the two branches:** the observation and its noise (including the per-throw velocity-noise range), the action interface (step sizes, 0.15 m lead, workspace box, IK settings, PID gains and their randomization, the per-throw action delay, 25 Hz), the throw sampler (catch zone, launch zone, flight time, fixed gravity, drag range and ball randomization), the catch test, the end-of-episode conditions and the 2.5 s limit. Make env changes where both branches pull from, and evaluate both on the same commit (the `.json` records it).
+- **Train with the same randomization.** A policy trained without drag, delay and the noise range is tested out of distribution. The `DcmmCfg.py` defaults now include them, so training picks them up.
 - **Free to change:** reward terms and weights, PPO settings, network size, randomization used only during training (report it).
-- **Final numbers come from `eval_catch.py`** on test seeds 10000–10999, not from `train_DCMM.py test=True` (that mode does not fix the throws). Pick the checkpoint on validation seeds 0–499.
+- **Final numbers come from `eval_catch.py`** on test seeds 10000–14999, not from `train_DCMM.py test=True` (that mode does not fix the throws). Pick the checkpoint on validation seeds 0–499.
 - `eval_catch.py --controller rl` reads the MLP size from the checkpoint; if the observation vector changes, update the flattening in `RLController.act` to match `PPO_Hoop.obs2tensor`.
 - If time allows, train 2–3 seeds and report the spread, plus training time.
 
 ## 7. Results
 
-Test seeds 10000–10999 (1000 throws per cell), 2026-11-09. Full tables, confidence intervals, paired tests and per-bin rates: `catch_it/results/summary.md` (regenerate with `python analyze_results.py --markdown results/summary.md`). RL rows are added with `CHECKPOINT=... bash run_eval_matrix.sh`.
+### exp01: one factor per condition
+
+Test seeds 10000–10999 (1000 throws per cell), 2026-11-09, code `ed79c76`. Full tables, confidence intervals, paired tests and per-bin rates: `catch_it/results/exp01_one_factor/summary.md`; settings in its `README.md`.
 
 | Catch rate | nominal | noise ×2 | noise ×4 | tracker noise | gravity fixed | delay +1 | delay +2 |
 |---|---|---|---|---|---|---|---|
@@ -134,6 +137,8 @@ What it shows:
 
 Settings used: `ClassicalCfg.py` as committed with these results (also recorded in each `.json`).
 
-## 8. Env change
+## 8. Env changes the RL branch needs too
 
-`DcmmVecEnv.py` logs two values for evaluation only (no change to the dynamics): `self.throw_time` (env time of the release) and `self.throw_flight_time`. `eval_catch.py` needs them, so the RL branch needs these 4 lines too.
+- `DcmmVecEnv.py` logs, for evaluation only: `self.throw_time` (env time of the release), `self.throw_flight_time`, and the per-throw draws `self.object_damping`, `self.act_delay_steps`, `self.k_obs_object_vel`.
+- Per-throw disturbances (exp02): `DcmmCfg.py` ranges for `k_obs_object_vel`, `object_damping`, `act_delay`, and `gravity_noise = 0`. `random_obs_noise()` draws the velocity-noise std last in `_reset_simulation()`, so the other draws for a seed are unchanged. `_get_obs` uses the per-throw std.
+- `_predict_path()` (reward shaping only) follows the drag path, so the shaping points at the ball's real path.

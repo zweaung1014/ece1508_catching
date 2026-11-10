@@ -5,13 +5,15 @@ reachable catch point on it, and drive the hoop there.
 
 It reads the same observation dict as the RL policy and returns the same 5-D action in [-1, 1]
 (hoop-center delta and tilt), so the env's speed limits, IK and PID apply to it exactly as to RL.
-It never reads the env's throw target, arrival velocity or gravity (except mode "perfect_state",
+It never reads the env's throw target, arrival velocity, gravity or drag (except mode "perfect_state",
 a diagnostic that is handed the true release state by the evaluator).
 
 Modes:
 - "single_read":   one parabola from the first clean read after release, never updated (open loop on the ball).
 - "multi_read":    re-fit the parabola to every read since release, every control step (closed loop).
-- "perfect_state": like single_read, but the parabola comes from the true release state and gravity.
+- "perfect_state": like single_read, but the path comes from the true release state, gravity and drag
+                   (exact prediction, so its misses come from planning and the arm only).
+single_read and multi_read assume no drag.
 
 Prediction: Eqs. (1)-(3) of Campana & Laumond (2016), see ballistic.py.
 Settings: configs/env/ClassicalCfg.py.
@@ -21,7 +23,7 @@ import numpy as np
 import mujoco
 import configs.env.DcmmCfg as DcmmCfg
 import configs.env.ClassicalCfg as CCfg
-from gym_dcmm.classical.ballistic import Parabola, fit_parabola
+from gym_dcmm.classical.ballistic import DragPath, fit_parabola
 
 MODES = ["single_read", "multi_read", "perfect_state"]
 
@@ -69,7 +71,8 @@ class ClassicalCatcher:
     def act(self, obs, privileged=None):
         """
         Map one observation to an action.
-        privileged: only for mode "perfect_state", dict(p0, v0, g, t_throw) in the arm-base frame.
+        privileged: only for mode "perfect_state", dict(p0, v0, g, k, t_throw) in the arm-base frame
+                    (k = drag rate, damping / mass).
         """
         t = self.k * self.dt
         self.k += 1
@@ -108,7 +111,8 @@ class ClassicalCatcher:
         if self.mode in ["single_read", "perfect_state"] and self.parabola is not None:
             return  # open loop on the ball: the first plan is final
         if self.mode == "perfect_state":
-            self.parabola = Parabola(privileged["p0"], privileged["v0"], privileged["t_throw"], privileged["g"])
+            self.parabola = DragPath(privileged["p0"], privileged["v0"], privileged["t_throw"], privileged["g"],
+                                     privileged["k"])
         elif self.mode == "single_read":
             self.parabola = fit_parabola(self.t_pos[-1:], self.p_reads[-1:], self.t_vel[-1:], self.v_reads[-1:],
                                          t_ref=t, vel_window=self.dt, g=CCfg.g_nominal, fit_g=False,

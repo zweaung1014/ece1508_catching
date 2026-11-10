@@ -1,17 +1,18 @@
 """
 Author: Zwe Min Htet Aung
-ABOUT: summarize the per-episode CSVs written by eval_catch.py.
+ABOUT: summarize the per-episode CSVs written by eval_catch.py for one experiment (results/<exp>/).
 
-Prints, per test condition:
+Prints, per test condition (an experiment without conditions is one block):
 1. Catch rate with a 95% Wilson interval, the outcome breakdown and effort metrics, per controller.
 2. Paired McNemar tests against a reference controller (same seeds = same throws).
 3. Classical diagnostics: prediction error, tracking error, and why each miss happened.
-4. Catch rate per bin of flight time, launch azimuth and required hoop travel.
+4. Catch rate per bin of the per-throw disturbances (velocity noise, drag, delay) when they were
+   randomized, then of flight time, launch azimuth and required hoop travel. The disturbances are
+   drawn independently, so each bin averages over the others.
 
 Usage (from catch_it/):
-  python analyze_results.py                   # all conditions under results/
-  python analyze_results.py --ref classical_multi --conditions nominal noise_x2
-  python analyze_results.py --markdown results/summary.md
+  python analyze_results.py --exp exp02_randomized --markdown results/exp02_randomized/summary.md
+  python analyze_results.py --exp exp01_one_factor --conditions nominal noise_x2
 """
 import os
 import argparse
@@ -59,18 +60,22 @@ def miss_reason(r):
     return "other (rim, IK, bounce)"
 
 
-def load(results_dir, conditions):
+def load(exp_dir, conditions):
     frames = []
-    for path in sorted(glob.glob(os.path.join(results_dir, "*", "*.csv"))):
-        cond = os.path.basename(os.path.dirname(path))
-        if conditions and cond not in conditions:
-            continue
+    for path in sorted(glob.glob(os.path.join(exp_dir, "**", "*.csv"), recursive=True)):
         df = pd.read_csv(path)
+        if "condition" not in df.columns:              # one setting per experiment (exp02 on)
+            df["condition"] = os.path.basename(os.path.normpath(exp_dir))
         df["run"] = os.path.splitext(os.path.basename(path))[0]   # controller name (+ tag)
         frames.append(df)
     if not frames:
-        raise SystemExit("no CSVs found under " + results_dir)
-    return pd.concat(frames, ignore_index=True)
+        raise SystemExit("no CSVs found under " + exp_dir)
+    df = pd.concat(frames, ignore_index=True)
+    if conditions:
+        df = df[df["condition"].isin(conditions)]
+    if "drag_rate" in df.columns:
+        df["drag_loss_pct"] = 100 * (1 - np.exp(-df["drag_rate"]))   # % of speed lost to drag over 1 s
+    return df
 
 
 def run_order(runs):
@@ -146,8 +151,10 @@ def summarize(df, ref, bins):
                 out.append(table([[run] + [int(reasons[run].get(k, 0)) for k in names] for run in cl], ["controller"] + names))
 
         # 4. Catch rate per bin
-        for col, edges, label in bins:
-            cats = pd.cut(d[col], edges, include_lowest=True)
+        for col, edges, label, names in bins:
+            if col not in d.columns or d[col].nunique() < 2:
+                continue
+            cats = pd.cut(d[col], edges, labels=names, include_lowest=True)
             g = d.assign(bin=cats).groupby(["bin", "run"], observed=False)["success"].mean().unstack("run")
             g = g[[run for run in runs if run in g.columns]]
             rows = [[str(b)] + ["{:.0%}".format(v) if not np.isnan(v) else "-" for v in g.loc[b].values] for b in g.index]
@@ -160,23 +167,28 @@ def summarize(df, ref, bins):
 
 def main():
     parser = argparse.ArgumentParser(description="Summarize eval_catch.py results")
+    parser.add_argument("--exp", required=True, help="experiment folder under --results_dir")
     parser.add_argument("--results_dir", default=os.path.join(CATCH_IT, "results"))
     parser.add_argument("--conditions", nargs="*", default=None)
     parser.add_argument("--ref", default="rl", help="reference controller for the paired tests")
     parser.add_argument("--markdown", default="", help="also write the summary to this file")
     args = parser.parse_args()
-    df = load(args.results_dir, args.conditions)
+    df = load(os.path.join(args.results_dir, args.exp), args.conditions)
     ref = args.ref if args.ref in df["run"].unique() else "classical_multi"
+    # (column, bin edges, table label, bin names or None for the interval)
     bins = [
-        ("flight_time", [0.6, 0.7, 0.8, 0.9, 1.0], "flight time (s)"),
-        ("launch_az_deg", [-60, -30, 0, 30, 60], "launch azimuth (deg)"),
-        ("home_to_target", [0.0, 0.2, 0.3, 0.4, 0.5, 0.8], "home-to-target distance (m)"),
+        ("vel_noise_std", [0.05, 0.0933, 0.1367, 0.18], "velocity noise std (m/s)", ["0.05-0.09", "0.09-0.14", "0.14-0.18"]),
+        ("drag_loss_pct", [0, 4, 8, 14], "speed lost to drag over 1 s (%)", ["0-4", "4-8", "8-13"]),
+        ("act_delay_steps", [-0.5, 0.5, 1.5, 2.5], "action delay (steps of 40 ms)", ["0", "1", "2"]),
+        ("flight_time", [0.6, 0.7, 0.8, 0.9, 1.0], "flight time (s)", None),
+        ("launch_az_deg", [-60, -30, 0, 30, 60], "launch azimuth (deg)", None),
+        ("home_to_target", [0.0, 0.2, 0.3, 0.4, 0.5, 0.8], "home-to-target distance (m)", None),
     ]
     text = summarize(df, ref, bins)
     print(text)
     if args.markdown:
         with open(args.markdown, "w") as f:
-            f.write("# HoopCatch evaluation summary\n" + text + "\n")
+            f.write("# HoopCatch evaluation summary: {}\n".format(args.exp) + text + "\n")
         print("\nsaved", args.markdown)
 
 

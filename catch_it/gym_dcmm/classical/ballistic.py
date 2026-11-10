@@ -84,6 +84,48 @@ class Parabola:
         return d / np.linalg.norm(d, axis=-1, keepdims=True)
 
 
+class DragPath:
+    """
+    Path of a ball with linear air drag: dv/dt = -g e_z - k v, with k = damping / mass (1/s).
+    This is the ball's true motion in the env (damping b on its free joint gives the force -b v).
+    Not part of Campana & Laumond; used for the ground truth and the perfect-state diagnostic.
+
+    Closed form, with a = -g e_z and tau = t - t_s:
+      v(t) = a/k + (c_dot_s - a/k) exp(-k tau)
+      c(t) = c_s + (a/k) tau + (c_dot_s - a/k) (1 - exp(-k tau)) / k
+    k = 0 gives the parabola of Eq. (1).
+
+    Args: as Parabola, plus k (1/s)
+    """
+    def __init__(self, c_s, c_dot_s, t_s=0.0, g=9.81, k=0.0):
+        self.c_s = np.asarray(c_s, dtype=np.float64).copy()
+        self.c_dot_s = np.asarray(c_dot_s, dtype=np.float64).copy()
+        self.t_s = float(t_s)
+        self.g = float(g)
+        self.k = float(k)
+        self._parabola = Parabola(self.c_s, self.c_dot_s, self.t_s, self.g) if self.k < 1e-9 else None
+
+    def position(self, t):
+        if self._parabola is not None:
+            return self._parabola.position(t)
+        tau = np.asarray(t, dtype=np.float64) - self.t_s
+        a_k = -self.g / self.k * E_Z                                   # terminal velocity a/k
+        decay = -np.expm1(-self.k * tau) / self.k                      # (1 - exp(-k tau)) / k
+        return self.c_s + np.multiply.outer(tau, a_k) + np.multiply.outer(decay, self.c_dot_s - a_k)
+
+    def velocity(self, t):
+        if self._parabola is not None:
+            return self._parabola.velocity(t)
+        tau = np.asarray(t, dtype=np.float64) - self.t_s
+        a_k = -self.g / self.k * E_Z
+        return a_k + np.multiply.outer(np.exp(-self.k * tau), self.c_dot_s - a_k)
+
+    def direction(self, t):
+        """Unit direction of travel at time t."""
+        v = self.velocity(t)
+        return v / np.linalg.norm(v, axis=-1, keepdims=True)
+
+
 def fit_parabola(t_pos, positions, t_vel, velocities, t_ref, vel_window,
                  g=9.81, fit_g=False, g_prior_sigma=0.5, pos_sigma=0.005, vel_sigma=0.05):
     """

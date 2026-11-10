@@ -66,7 +66,7 @@ PPO also normalizes inputs with a running mean and standard deviation (`normaliz
 Why these choices:
 - **Hoop axis instead of a quaternion.** The hoop looks the same however it spins about its own axis, so 3 numbers say everything that matters. A quaternion has the q/−q ambiguity, which confuses networks.
 - **No ball history.** The policy is a plain MLP with no memory, so everything it needs must be in the current step: position and velocity of the ball.
-- **Ball velocity noise is easy on purpose.** Velocity is differenced from true positions plus 0.05 m/s noise. A real tracker differencing its own noisy positions would give about 0.18 m/s of noise. Knobs: `k_obs_object`, `k_obs_object_vel`.
+- **Ball velocity noise varies per throw.** Velocity is differenced from true positions plus Gaussian noise whose std is drawn per throw from 0.05–0.18 m/s. 0.05 is an easy tracker; 0.18 is what a real tracker differencing its own 5 mm-noise positions at 25 Hz would give. Knobs: `k_obs_object`, `k_obs_object_vel` (a range).
 
 ## 5. Action: what the policy outputs (5 numbers in [−1, 1])
 
@@ -142,11 +142,15 @@ Checked after **every 2 ms physics step**, not every policy step. At 5 m/s the b
 |---|---|---|
 | Ball radius | 0.035–0.045 m | `object_radius` |
 | Ball mass | 0.035–0.075 kg (hollow-sphere inertia) | `object_mass` |
-| Ball damping (≈ drag) | 0 | `object_damping`. Keep at 0 unless you also account for drag in the throw solve. |
-| Gravity | −9.81 ± 0.5 m/s² | `gravity_noise` |
+| Air drag (damping b on the ball's free joint, force −b·v) | b 0–0.005 (a 35 g ball loses up to ~13% of its speed per second) | `object_damping`. Throws are aimed as if there were no drag, so the ball falls a bit short. |
+| Gravity | fixed at −9.81 m/s² | `gravity_noise` (0) |
+| Ball velocity noise std | 0.05–0.18 m/s | `k_obs_object_vel` |
+| Action delay | arm follows the command from 0, 1 or 2 steps ago (0/40/80 ms) | `act_delay` (buffer length 1–3) |
 | Arm PID gain scale | ×0.75–1.25 per joint | `k_arm` |
 | Torque noise | ×N(1, 0.025) per physics step | `k_act` |
 | Hold time before throw | 0.5–0.75 s | `object_static` |
+
+The reward's privileged path prediction (`_predict_path`) includes the drag, so the shaping points at the ball's real path.
 
 ## 9. PPO
 

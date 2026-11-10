@@ -218,6 +218,10 @@ class DcmmVecEnv(gym.Env):
 
         # Random PID Params
         self.k_arm = np.ones(6)
+        # Per-throw disturbances (drawn in _reset_simulation)
+        self.object_damping = 0.0
+        self.act_delay_steps = 0
+        self.k_obs_object_vel = float(DcmmCfg.k_obs_object_vel[0])
 
     def _reset_episode_state(self):
         self.outcome = OUTCOME_NONE
@@ -276,7 +280,7 @@ class DcmmVecEnv(gym.Env):
             },
             "object": {
                 "pos3d": obj_pos_obs,
-                "v_lin_3d": (obj_pos3d - self.prev_obj_pos3d)*self.fps + np.random.normal(0, DcmmCfg.k_obs_object_vel, 3),
+                "v_lin_3d": (obj_pos3d - self.prev_obj_pos3d)*self.fps + np.random.normal(0, self.k_obs_object_vel, 3),
                 "rel_pos3d": obj_pos_obs - hoop_pos_obs,
             },
             "prev_action": self.prev_action.copy(),
@@ -331,7 +335,9 @@ class DcmmVecEnv(gym.Env):
         # Thin hollow sphere (like a tennis ball)
         model.body_inertia[self.object_body_id] = 2.0 / 3.0 * self.object_mass * self.object_radius**2
         adr = self.Dcmm.object_qvel_adr
-        model.dof_damping[adr:adr+6] = np.random.uniform(DcmmCfg.object_damping[0], DcmmCfg.object_damping[1])
+        # Damping b on the free joint = linear air drag -b*v (logged for evaluation)
+        self.object_damping = np.random.uniform(DcmmCfg.object_damping[0], DcmmCfg.object_damping[1])
+        model.dof_damping[adr:adr+6] = self.object_damping
 
     def random_throw(self):
         # Target point inside the catch zone (w.r.t. the arm base)
@@ -369,8 +375,14 @@ class DcmmVecEnv(gym.Env):
     def random_delay(self):
         # Random the Delay Buffer Params
         self.action_buffer["arm"].set_maxlen(np.random.choice(DcmmCfg.act_delay['arm']))
+        # Buffer length 1 = no delay; the arm follows the command from (length - 1) steps ago
+        self.act_delay_steps = int(self.action_buffer["arm"].maxlen) - 1
         # Clear Buffer
         self.action_buffer["arm"].clear()
+
+    def random_obs_noise(self):
+        # Std of the ball velocity noise for this throw
+        self.k_obs_object_vel = np.random.uniform(DcmmCfg.k_obs_object_vel[0], DcmmCfg.k_obs_object_vel[1])
 
     def _reset_simulation(self):
         # Reset the data in Mujoco Simulation
@@ -399,6 +411,8 @@ class DcmmVecEnv(gym.Env):
         self.random_PID()
         # Random Delay
         self.random_delay()
+        # Random ball velocity noise (drawn last, so the draws above stay the same per seed)
+        self.random_obs_noise()
         # Forward Kinematics
         mujoco.mj_forward(self.Dcmm.model, self.Dcmm.data)
         mujoco.mj_forward(self.Dcmm.model_arm, self.Dcmm.data_arm)
@@ -499,13 +513,21 @@ class DcmmVecEnv(gym.Env):
         v = self._get_object_v_lin_3d()
         g = self.Dcmm.model.opt.gravity
         tau = self.path_tau[:, None]
-        path = p + tau * v + 0.5 * tau**2 * g
+        # Linear drag dv/dt = g - k v (k = damping / mass); k = 0 is the plain parabola
+        k = self.object_damping / self.object_mass
+        if k > 1e-9:
+            decay = -np.expm1(-k * tau) / k                  # (1 - exp(-k tau)) / k
+            path = p + (g / k) * tau + (v - g / k) * decay
+            v_path = g / k + (v - g / k) * np.exp(-k * tau)
+        else:
+            path = p + tau * v + 0.5 * tau**2 * g
+            v_path = v + g * tau
         # Cut the path where the ball would reach the floor
         below = np.nonzero(path[:, 2] < self.object_radius)[0]
         n = max(1, below[0]) if below.size else len(path)
         dist = np.linalg.norm(path[:n] - self.Dcmm.data.site("hoop_center").xpos, axis=1)
-        k = np.argmin(dist)
-        return dist[k], v + g * self.path_tau[k]
+        i = np.argmin(dist)
+        return dist[i], v_path[i]
 
     def compute_reward(self, action):
         '''

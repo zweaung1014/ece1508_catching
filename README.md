@@ -75,13 +75,13 @@ python train_DCMM.py task=HoopCatch test=True num_envs=8 device_id=0 \
 
 Memory-limited runs, resuming, and gotchas are covered in [RUN_COMMANDS.md](catch_it/RUN_COMMANDS.md).
 
-**Compare against the classical baseline.** Every controller runs on the same 1000 test throws (seeds 10000–10999). Details: [docs/classical_baseline.md](docs/classical_baseline.md).
+**Compare against the classical baseline.** Every controller runs on the same 5000 test throws (seeds 10000–14999). Each throw draws its own velocity noise, air drag and action delay. Details: [docs/classical_baseline.md](docs/classical_baseline.md).
 
 ```bash
-python eval_catch.py --controller classical_multi                     # classical catcher, re-plans every step
-python eval_catch.py --controller rl --checkpoint outputs/<run>/nn/<file>.pth
-CHECKPOINT=outputs/<run>/nn/<file>.pth bash run_eval_matrix.sh        # all controllers x all test conditions
-python analyze_results.py                                             # catch rates, CIs, paired tests
+python eval_catch.py --exp scratch --controller classical_multi                        # classical catcher, re-plans every step
+python eval_catch.py --exp scratch --controller rl --checkpoint outputs/<run>/nn/<file>.pth
+EXP=exp02_randomized CHECKPOINT=outputs/<run>/nn/<file>.pth bash run_eval.sh          # all controllers
+python analyze_results.py --exp exp02_randomized                                      # catch rates, CIs, paired tests
 ```
 
 ## MDP definition

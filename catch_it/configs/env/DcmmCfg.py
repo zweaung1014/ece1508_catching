@@ -103,21 +103,27 @@ k_arm = np.array([0.75, 1.25])
 ## Ball (sphere)
 object_radius = np.array([0.035, 0.045])
 object_mass = np.array([0.035, 0.075])
-# Joint damping on the ball's free joint acts like air drag. Keep ~0 so the aimed throws land in the zone.
-object_damping = np.array([0.0, 0.0])
+# Air drag: damping b on the ball's free joint gives the force -b*v, so the speed decays as exp(-(b/m) t).
+# b is drawn per throw; at 0.005 a 35 g ball loses ~13% of its speed over 1 s (a 75 g ball ~6.5%).
+# Throws are aimed as if there were no drag, so with drag the ball falls a bit short of the aim point.
+object_damping = np.array([0.0, 0.005])
 object_static = np.array([0.5, 0.75])
-## Gravity: -9.81 +/- gravity_noise
-gravity_noise = 0.5
-## Observation Noise
+## Gravity: -9.81 +/- gravity_noise (0 = fixed at 9.81)
+gravity_noise = 0.0
+## Observation Noise (Gaussian std)
 k_obs_arm = 0.001
 k_obs_hoop = 0.001
 k_obs_object = 0.005
-k_obs_object_vel = 0.05
+# Ball velocity noise: the std is drawn per throw from this range (m/s).
+# 0.05 is an easy tracker; 0.18 is a tracker differencing its own 5 mm-noise positions at 25 Hz.
+k_obs_object_vel = np.array([0.05, 0.18])
 ## Actions Noise
 k_act = 0.025
 ## Action Delay
+# Length of the joint-target buffer, drawn per throw: 1 = the arm follows the latest command,
+# 2 / 3 = the command from 1 / 2 control steps (40 / 80 ms) ago.
 act_delay = {
-    'arm': [1,],
+    'arm': [1, 2, 3],
 }
 
 ## Define PID params for the arm.
