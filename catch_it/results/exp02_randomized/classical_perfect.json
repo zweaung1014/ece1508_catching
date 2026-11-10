@@ -1,0 +1,210 @@
+{
+  "controller": "classical_perfect",
+  "exp": "exp02_randomized",
+  "seeds": "10000:15000",
+  "episodes": 5000,
+  "checkpoint": "",
+  "git_commit": "df856c0edb07d6c4006e126565c769dec9e6ae85",
+  "git_dirty": false,
+  "wall_time_s": 175.2,
+  "catch_rate": 0.9622,
+  "env_cfg": {
+    "arm_joints": [
+      0.0,
+      0.0,
+      -0.0,
+      3.07,
+      2.25,
+      -1.5
+    ],
+    "hoop_ring_radius": 0.125,
+    "action_scale": {
+      "pos": 0.04,
+      "tilt": 0.1
+    },
+    "hoop_target_low": [
+      -0.75,
+      -0.05,
+      0.0
+    ],
+    "hoop_target_high": [
+      0.75,
+      0.9,
+      1.1
+    ],
+    "hoop_target_lead": 0.15,
+    "reward_weights": {
+      "r_path_progress": 5.0,
+      "r_path_near": 0.5,
+      "r_align": 0.5,
+      "r_catch": 100.0,
+      "r_rim": -2.0,
+      "r_ball_fail": -10.0,
+      "r_collision": -10.0,
+      "r_smooth": 0.02,
+      "r_constraint": 1.0
+    },
+    "path_near_sigma": 0.1,
+    "align_sigma": 0.2,
+    "path_horizon": 1.5,
+    "path_dt": 0.01,
+    "catch_zone": {
+      "r": [
+        0.35,
+        0.65
+      ],
+      "azimuth": [
+        -0.7853981633974483,
+        0.7853981633974483
+      ],
+      "z": [
+        0.3,
+        0.8
+      ]
+    },
+    "launch_zone": {
+      "r": [
+        2.0,
+        3.0
+      ],
+      "azimuth": [
+        -1.0471975511965976,
+        1.0471975511965976
+      ],
+      "z": [
+        0.8,
+        1.6
+      ]
+    },
+    "flight_time": [
+      0.6,
+      1.0
+    ],
+    "cam_config": {
+      "name": "top",
+      "width": 640,
+      "height": 480
+    },
+    "ik_config": {
+      "solver_type": "QP",
+      "ps": 0.001,
+      "\u03bb\u03a3": 12.5,
+      "ilimit": 100,
+      "ee_tol": 0.0001,
+      "free_ee_z_rot": true,
+      "gain": 1.0
+    },
+    "k_arm": [
+      0.75,
+      1.25
+    ],
+    "object_radius": [
+      0.035,
+      0.045
+    ],
+    "object_mass": [
+      0.035,
+      0.075
+    ],
+    "object_damping": [
+      0.0,
+      0.005
+    ],
+    "object_static": [
+      0.5,
+      0.75
+    ],
+    "gravity_noise": 0.0,
+    "k_obs_arm": 0.001,
+    "k_obs_hoop": 0.001,
+    "k_obs_object": 0.005,
+    "k_obs_object_vel": [
+      0.05,
+      0.18
+    ],
+    "k_act": 0.025,
+    "act_delay": {
+      "arm": [
+        1,
+        2,
+        3
+      ]
+    },
+    "Kp_arm": [
+      300.0,
+      400.0,
+      400.0,
+      50.0,
+      200.0,
+      20.0
+    ],
+    "Ki_arm": [
+      0.01,
+      0.01,
+      0.01,
+      0.01,
+      0.01,
+      0.001
+    ],
+    "Kd_arm": [
+      40.0,
+      40.0,
+      40.0,
+      5.0,
+      10.0,
+      1.0
+    ],
+    "llim_arm": [
+      -300.0,
+      -300.0,
+      -300.0,
+      -50.0,
+      -50.0,
+      -20.0
+    ],
+    "ulim_arm": [
+      300.0,
+      300.0,
+      300.0,
+      50.0,
+      50.0,
+      20.0
+    ]
+  },
+  "classical_cfg": {
+    "pos_sigma": 0.005,
+    "vel_sigma": 0.05,
+    "g_nominal": 9.81,
+    "fit_gravity": true,
+    "g_prior_sigma": 0.5,
+    "release_disp": 0.03,
+    "release_speed": 1.0,
+    "reach_region": {
+      "r": [
+        0.35,
+        0.65
+      ],
+      "azimuth": [
+        -0.7853981633974483,
+        0.7853981633974483
+      ],
+      "z": [
+        0.3,
+        0.8
+      ]
+    },
+    "hoop_speed": 0.8,
+    "hoop_tilt_rate": 2.0,
+    "settle_time": 0.1,
+    "tilt_cost": 0.2,
+    "candidate_dt": 0.01,
+    "min_lead": 0.04,
+    "horizon": 1.5,
+    "commit_time": 0.15,
+    "replan_slack": -0.05,
+    "ready_pose": true,
+    "ready_r": 0.5,
+    "ready_z": 0.55,
+    "ready_elevation": 0.7853981633974483
+  }
+}

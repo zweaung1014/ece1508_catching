@@ -137,6 +137,27 @@ What it shows:
 
 Settings used: `ClassicalCfg.py` as committed with these results (also recorded in each `.json`).
 
+### exp02: every disturbance randomized per throw
+
+Test seeds 10000–14999 (5000 throws per controller), 2026-11-10, code `df856c0`. Full tables: `catch_it/results/exp02_randomized/summary.md`; settings in its `README.md`.
+
+| Catch rate | all throws | delay 0 / 1 / 2 steps | vel noise low / mid / high | drag speed loss 0–4 / 4–8 / 8–13% |
+|---|---|---|---|---|
+| random | 5.9% | | | |
+| classical_single | 57.2% | 65 / 57 / 50% | 77 / 55 / 40% | 59 / 57 / 53% |
+| classical_multi | 96.1% | 100 / 98 / 91% | 97 / 96 / 96% | 96 / 96 / 96% |
+| classical_perfect | 96.2% | 100 / 98 / 91% | 96 / 96 / 96% | 95 / 97 / 97% |
+| oracle | 90.8% | 95 / 92 / 85% | 90 / 91 / 91% | 94 / 91 / 79% |
+
+What it shows:
+
+- **Delay is the only disturbance that hurts the multi-read catcher**: it catches everything without delay and 91% at 2 steps. `classical_perfect`, which predicts exactly, gets the same 96.2% and fails on the same pattern, so the multi-read catcher's prediction is not the bottleneck: the arm arriving late is.
+- **Drag and velocity noise don't matter to it**: re-fitting every step tracks the real (dragged) path to 0.6 cm median, though it assumes no drag and a 0.05 m/s noise.
+- **The single-read catcher collapses with velocity noise** (77% → 40%): one velocity read carries all the error. 1553 of its 2141 misses are prediction errors.
+- **The oracle loses with drag** (94% → 79%): it drives to the drag-free aim point, which the ball no longer passes through.
+- The "not reachable in time" label on most multi-read misses is a side effect of delay (late re-plans are logged as infeasible; 92% of those throws are still caught), not a reachability problem.
+- For the RL comparison: the room to beat the classical catcher is at 1–2 steps of delay, where both classical modes lose 2–9% of throws.
+
 ## 8. Env changes the RL branch needs too
 
 - `DcmmVecEnv.py` logs, for evaluation only: `self.throw_time` (env time of the release), `self.throw_flight_time`, and the per-throw draws `self.object_damping`, `self.act_delay_steps`, `self.k_obs_object_vel`.
