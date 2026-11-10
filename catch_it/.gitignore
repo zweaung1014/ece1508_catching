@@ -3,3 +3,5 @@ gym_dcmm.egg-info/
 MUJOCO_LOG.TXT
 /outputs/
 **.log
+# Per-episode evaluation CSVs (regenerate with run_eval_matrix.sh); summary.md and the .json run records are kept
+results/*/*.csv

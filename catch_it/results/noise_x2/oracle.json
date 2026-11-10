@@ -1,0 +1,48 @@
+{
+  "controller": "oracle",
+  "condition": "noise_x2",
+  "overrides": "{'k_obs_object': 0.01, 'k_obs_object_vel': 0.1}",
+  "seeds": "10000:11000",
+  "episodes": 1000,
+  "checkpoint": "",
+  "git_commit": "8510670c727d1a99726d7d4ee69f40c7034f3bb9",
+  "git_dirty": true,
+  "wall_time_s": 46.0,
+  "catch_rate": 0.949,
+  "classical_cfg": {
+    "pos_sigma": 0.005,
+    "vel_sigma": 0.05,
+    "g_nominal": 9.81,
+    "fit_gravity": true,
+    "g_prior_sigma": 0.5,
+    "release_disp": 0.03,
+    "release_speed": 1.0,
+    "reach_region": {
+      "r": [
+        0.35,
+        0.65
+      ],
+      "azimuth": [
+        -0.7853981633974483,
+        0.7853981633974483
+      ],
+      "z": [
+        0.3,
+        0.8
+      ]
+    },
+    "hoop_speed": 0.8,
+    "hoop_tilt_rate": 2.0,
+    "settle_time": 0.1,
+    "tilt_cost": 0.2,
+    "candidate_dt": 0.01,
+    "min_lead": 0.04,
+    "horizon": 1.5,
+    "commit_time": 0.15,
+    "replan_slack": -0.05,
+    "ready_pose": true,
+    "ready_r": 0.5,
+    "ready_z": 0.55,
+    "ready_elevation": 0.7853981633974483
+  }
+}

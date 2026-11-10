@@ -15,6 +15,9 @@ A fixed-base xArm6 with a hoop (ring + net) on its last link learns, with PPO in
 | [catch_it/RUN_COMMANDS.md](catch_it/RUN_COMMANDS.md) | Full command reference |
 | [docs/hoop_rl_design.md](docs/hoop_rl_design.md) | Full RL design notes and the reasoning behind them |
 | [docs/after_training.md](docs/after_training.md) | How to evaluate and diagnose a trained policy |
+| [catch_it/gym_dcmm/classical/](catch_it/gym_dcmm/classical/) | Classical baseline: parabola prediction (Campana & Laumond) and the catcher |
+| [catch_it/eval_catch.py](catch_it/eval_catch.py) | Evaluates any controller (RL, classical, oracle, random) on fixed seeds |
+| [docs/classical_baseline.md](docs/classical_baseline.md) | Classical baseline design, experiment, and how to keep RL and classical comparable |
 
 ## Setup
 
@@ -71,6 +74,15 @@ python train_DCMM.py task=HoopCatch test=True num_envs=8 device_id=0 \
 ```
 
 Memory-limited runs, resuming, and gotchas are covered in [RUN_COMMANDS.md](catch_it/RUN_COMMANDS.md).
+
+**Compare against the classical baseline.** Every controller runs on the same 1000 test throws (seeds 10000–10999). Details: [docs/classical_baseline.md](docs/classical_baseline.md).
+
+```bash
+python eval_catch.py --controller classical_multi                     # classical catcher, re-plans every step
+python eval_catch.py --controller rl --checkpoint outputs/<run>/nn/<file>.pth
+CHECKPOINT=outputs/<run>/nn/<file>.pth bash run_eval_matrix.sh        # all controllers x all test conditions
+python analyze_results.py                                             # catch rates, CIs, paired tests
+```
 
 ## MDP definition
 

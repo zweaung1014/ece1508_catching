@@ -226,6 +226,8 @@ class DcmmVecEnv(gym.Env):
         self.ball_touched = False
         self.prev_d_path = None
         self.prev_ring_side = 0.0
+        # Env time (s since reset) at which the ball was released; logged for evaluation only
+        self.throw_time = None
         # Episode statistics (logged at the end of every episode)
         self.min_ball_dist = 10.0
         self.min_path_dist = 10.0
@@ -349,6 +351,7 @@ class DcmmVecEnv(gym.Env):
                                height])
         # Ballistic velocity that hits the target after the flight time T: p_T = p_0 + v_0 T + 0.5 g T^2
         T = np.random.uniform(DcmmCfg.flight_time[0], DcmmCfg.flight_time[1])
+        self.throw_flight_time = T  # logged for evaluation only
         g = self.Dcmm.model.opt.gravity.copy()
         v0 = (target - launch_pos) / T - 0.5 * g * T
         self.throw_arrival_vel = v0 + g * T
@@ -603,6 +606,7 @@ class DcmmVecEnv(gym.Env):
                                             velocity=self.object_vel6d[:])
                 self.Dcmm.data.ctrl[self.Dcmm.object_ctrl_id] = 0.0
                 self.object_throw = True
+                self.throw_time = self.Dcmm.data.time - self.start_time
 
             mujoco.mj_step(self.Dcmm.model, self.Dcmm.data)
 
