@@ -167,6 +167,25 @@ What it shows:
 - The "not reachable in time" label on most multi-read misses is a side effect of delay (late re-plans are logged as infeasible; 92% of those throws are still caught), not a reachability problem.
 - For the RL comparison: the room to beat the classical catcher is at 1–2 steps of delay, where both classical modes lose 2–9% of throws.
 
+### exp03: stronger disturbances, wind, aimed throws
+
+Test seeds 10000–14999 (5000 throws per controller), 2026-11-11, code `c403bf3`. Settings and the pilot that chose them: `catch_it/results/exp03_harder/README.md`; full tables in its `summary.md`.
+
+| Catch rate | all throws | exp02 | delay 0 / 1 / 2 / 3 / 4 steps | crosswind 0–0.01 / 0.01–0.02 / 0.02–0.04 N |
+|---|---|---|---|---|
+| random | 5.0% (4.5–5.7) | 5.9% | | |
+| classical_single | 21.5% (20.4–22.7) | 57.2% | 23 / 22 / 20 / 22 / 21% | 23 / 21 / 20% |
+| **classical_multi** | **76.0% (74.8–77.2)** | 96.1% | 99 / 91 / 76 / 65 / 51% | 80 / 75 / 70% |
+| classical_perfect | 81.4% (80.3–82.5) | 96.2% | 99 / 96 / 87 / 69 / 56% | 82 / 80 / 83% |
+| oracle | 84.4% (83.3–85.4) | 90.8% | 96 / 95 / 86 / 73 / 72% | 84 / 84 / 85% |
+
+- **Delay is still the biggest factor.** 843 of `classical_multi`'s 1200 misses are at 3–4 steps, and `classical_perfect` (exact prediction) drops almost as much, so the arm arriving late is the main loss.
+- **Wind is where the parabola falls behind.** With crosswind, multi's cross-path prediction error rises from 1.7 to 3.3 cm (median) and its catch rate from 80% to 70%, while `classical_perfect`, which knows the wind, stays flat.
+- **Sensor noise does not affect the multi-read catcher** (75–77% across all noise bins), because it averages every read since the release.
+- **The oracle beats it** (84.4% vs 76.0%, p = 7·10⁻³⁰) because it knows the aim point before the release, so delay hurts it less (72% at 4 steps). It is a privileged reference.
+- As in exp02, multi's "not reachable in time" label is a side effect of late re-plans under delay (73% of throws flagged, 69% of those still caught).
+- For the RL comparison: the room is at 2–4 steps of delay and in wind. The sensor noise mostly hurts a memoryless policy (section 6).
+
 ## 8. Env changes the RL branch needs too
 
 The RL branch (`larry-catch`) is at `8510670`, before both exp02 and exp03. It needs:
