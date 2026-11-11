@@ -22,9 +22,9 @@ Frame convention: every position the policy sees is **relative to the arm base**
 
 Control runs at **25 Hz**: one policy step is 20 physics steps of 2 ms. An episode lasts at most 2.5 s, about 62 policy steps.
 
-1. **Reset:** arm goes to the home pose, ball size/mass and gravity are randomized, and a throw is sampled. At home the hoop center is at (0.0, 0.39, 0.32) m and the opening faces forward-up at about 39°.
+1. **Reset:** arm goes to the home pose, the ball and the per-throw disturbances (§8) are randomized, and a throw is sampled. At home the hoop center is at (0.0, 0.39, 0.32) m and the opening faces forward-up at about 39°.
 2. **Hold, 0.5–0.75 s (random):** the ball is held still at the launch point. The policy can already see it and move the hoop.
-3. **Throw:** the ball gets its launch velocity and flies ballistically (no drag).
+3. **Throw:** the ball gets its launch velocity and flies under gravity, linear air drag and a constant wind force (§8).
 4. **End:** the episode ends at the first of catch, ball hits floor, ball hits robot, arm collision, or 2.5 s timeout.
 
 ## 3. Throw sampler (`random_throw`, `DcmmCfg.catch_zone / launch_zone / flight_time`)
@@ -34,7 +34,7 @@ Each throw is **aimed** at a target point the arm can reach:
 1. Target point `p_T` in the **catch zone**: horizontal distance 0.35–0.65 m from the arm base, azimuth ±45° from +y, height 0.3–0.8 m above the arm base (0.70–1.20 m above the floor).
 2. Launch point `p_0`: horizontal distance 2.0–3.0 m, azimuth ±60° from +y, height 0.8–1.6 m above the floor.
 3. Flight time `T` between 0.6 and 1.0 s.
-4. Launch velocity `v0 = (p_T − p_0)/T − ½·g·T`, using the episode's randomized gravity. The ball passes exactly through `p_T` at time `T`.
+4. Launch velocity `v0 = (p_T − p_0)/T − ½·g·T` without drag or wind. With them (`aim_with_disturbances`, the default), `aim_throw()` solves the closed form of the drag-and-wind path for v0 instead. Either way the ball passes exactly through `p_T` at time `T`.
 
 The resulting throws:
 - Launch speeds of 3.8–5.3 m/s.
@@ -43,7 +43,7 @@ The resulting throws:
 
 How the zone was chosen: I sampled 200k random arm poses and checked where the hoop can be and which way it can face. Within this zone, about 86% of sampled throws have a reachable hoop pose within 4 cm of `p_T` and within 30° of facing the ball, and 97% within 45°. Sparse sampling underestimates this.
 
-Validation: the **oracle** (a scripted controller that cheats by knowing `p_T`) catches **96.5%** (193/200). So almost every throw is catchable, and the catch detection works. Rerun it whenever you change the throw or zone settings (`RUN_COMMANDS.md` §1).
+Validation: the **oracle** (a scripted controller that cheats by knowing `p_T`) caught **96.5%** (193/200) with the original settings, so almost every throw is catchable and the catch detection works. Under the exp03 disturbances (§8) it catches about 83% (about 97% at zero action delay). Rerun it whenever you change the throw or zone settings (`RUN_COMMANDS.md` §1).
 
 ## 4. State: what the policy sees (35 numbers)
 
@@ -56,8 +56,8 @@ Flattened in this exact order in `obs2tensor`. Changing the order or size breaks
 | 6–8 | Hoop velocity | 3 | Finite difference of the true position × 25 Hz, + N(0, 0.001) |
 | 9–14 | Arm joint positions | 6 | + N(0, 0.001) |
 | 15–20 | Arm joint velocities | 6 | + N(0, 0.001) |
-| 21–23 | Ball position | 3 | + N(0, 0.005), stands in for a camera tracker |
-| 24–26 | Ball velocity | 3 | Finite difference of the **true** position × 25 Hz, + N(0, 0.05) |
+| 21–23 | Ball position | 3 | + N(0, σ_p), σ_p drawn per throw from 5–20 mm; stands in for a camera tracker |
+| 24–26 | Ball velocity | 3 | Finite difference of the **true** position × 25 Hz, + N(0, σ_v), σ_v drawn per throw from 0.1–0.4 m/s |
 | 27–29 | Ball minus hoop (from the noisy values above) | 3 | Duplicate information that makes learning easier |
 | 30–34 | Previous action, normalized | 5 | |
 
@@ -66,7 +66,8 @@ PPO also normalizes inputs with a running mean and standard deviation (`normaliz
 Why these choices:
 - **Hoop axis instead of a quaternion.** The hoop looks the same however it spins about its own axis, so 3 numbers say everything that matters. A quaternion has the q/−q ambiguity, which confuses networks.
 - **No ball history.** The policy is a plain MLP with no memory, so everything it needs must be in the current step: position and velocity of the ball.
-- **Ball velocity noise varies per throw.** Velocity is differenced from true positions plus Gaussian noise whose std is drawn per throw from 0.05–0.18 m/s. 0.05 is an easy tracker; 0.18 is what a real tracker differencing its own 5 mm-noise positions at 25 Hz would give. Knobs: `k_obs_object`, `k_obs_object_vel` (a range).
+- **Ball noise varies per throw.** Position noise std 5–20 mm (a good to mediocre depth camera at 2–3 m); velocity noise std 0.1–0.4 m/s (lightly filtered differences of those positions; unfiltered 25 Hz differences would give ~0.18–0.7 m/s). Knobs: `k_obs_object`, `k_obs_object_vel` (ranges).
+- **At this noise a memoryless policy is at a disadvantage.** One frame with 0.4 m/s velocity noise puts ~10 cm of error into where the ball will be 0.25 s later; the classical catcher averages ~20 reads. Consider stacking the last few ball observations.
 
 ## 5. Action: what the policy outputs (5 numbers in [−1, 1])
 
@@ -136,21 +137,24 @@ Checked after **every 2 ms physics step**, not every policy step. At 5 m/s the b
   - Arm or hoop on base or floor: collision.
 - `info["outcome"]`: 1 catch, 2 ball_floor, 3 ball_robot, 4 collision, 5 timeout. The trainer logs the fraction of each.
 
-## 8. Domain randomization (per episode)
+## 8. Domain randomization (per throw; exp03 ranges)
 
 | What | Range | Where |
 |---|---|---|
 | Ball radius | 0.035–0.045 m | `object_radius` |
 | Ball mass | 0.035–0.075 kg (hollow-sphere inertia) | `object_mass` |
-| Air drag (damping b on the ball's free joint, force −b·v) | b 0–0.005 (a 35 g ball loses up to ~13% of its speed per second) | `object_damping`. Throws are aimed as if there were no drag, so the ball falls a bit short. |
+| Air drag (damping b on the ball's free joint, force −b·v) | b 0–0.015 (a 35 g ball loses up to ~35% of its speed per second) | `object_damping` |
+| Wind (constant horizontal force on the ball after release) | 0–0.04 N, random direction (about a 5 m/s breeze on a 4 cm ball) | `wind_force` |
+| Throw aim | the launch velocity accounts for the drag and wind, so the ball still passes through `p_T` | `aim_with_disturbances` (True) |
 | Gravity | fixed at −9.81 m/s² | `gravity_noise` (0) |
-| Ball velocity noise std | 0.05–0.18 m/s | `k_obs_object_vel` |
-| Action delay | arm follows the command from 0, 1 or 2 steps ago (0/40/80 ms) | `act_delay` (buffer length 1–3) |
-| Arm PID gain scale | ×0.75–1.25 per joint | `k_arm` |
-| Torque noise | ×N(1, 0.025) per physics step | `k_act` |
+| Ball position noise std | 5–20 mm | `k_obs_object` |
+| Ball velocity noise std | 0.1–0.4 m/s | `k_obs_object_vel` |
+| Action delay | arm follows the command from 0–4 steps ago (0–160 ms) | `act_delay` (buffer length 1–5) |
+| Arm PID gain scale | ×0.5–1.5 per joint | `k_arm` |
+| Torque noise | ×N(1, 0.10) per physics step | `k_act` |
 | Hold time before throw | 0.5–0.75 s | `object_static` |
 
-The reward's privileged path prediction (`_predict_path`) includes the drag, so the shaping points at the ball's real path.
+The reward's privileged path prediction (`_predict_path`) includes the drag and wind, so the shaping points at the ball's real path. These are the ranges of the classical baseline's exp03 test (`docs/classical_baseline.md`); train with them so the comparison is in distribution.
 
 ## 9. PPO
 

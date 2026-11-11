@@ -6,12 +6,13 @@ Prints, per test condition (an experiment without conditions is one block):
 1. Catch rate with a 95% Wilson interval, the outcome breakdown and effort metrics, per controller.
 2. Paired McNemar tests against a reference controller (same seeds = same throws).
 3. Classical diagnostics: prediction error, tracking error, and why each miss happened.
-4. Catch rate per bin of the per-throw disturbances (velocity noise, drag, delay) when they were
-   randomized, then of flight time, launch azimuth and required hoop travel. The disturbances are
-   drawn independently, so each bin averages over the others.
+4. Catch rate per bin of the per-throw disturbances (noise, drag, wind, delay, PID gains) when they
+   were randomized, then of flight time, launch azimuth and required hoop travel. The disturbances are
+   drawn independently, so each bin averages over the others. The bin edges follow the experiment's
+   ranges (the first edge set that covers the data).
 
 Usage (from catch_it/):
-  python analyze_results.py --exp exp02_randomized --markdown results/exp02_randomized/summary.md
+  python analyze_results.py --exp exp03_harder --markdown results/exp03_harder/summary.md
   python analyze_results.py --exp exp01_one_factor --conditions nominal noise_x2
 """
 import os
@@ -95,6 +96,18 @@ def table(rows, headers):
     return "\n".join(out)
 
 
+def pick_bins(x, specs):
+    """First (edges, names) in specs that covers the data; "int" = one bin per integer value."""
+    lo, hi = x.min(), x.max()
+    if specs == "int":
+        top = int(round(hi))
+        return list(np.arange(-0.5, top + 1.0, 1.0)), [str(i) for i in range(top + 1)]
+    for edges, names in specs:
+        if edges[0] <= lo + 1e-9 and edges[-1] >= hi - 1e-9:
+            return edges, names
+    return list(np.linspace(lo, hi, 4)), None          # no spec fits: three equal-width bins
+
+
 def summarize(df, ref, bins):
     out = []
     for cond in sorted(df["condition"].unique(), key=lambda c: (c != "nominal", c)):
@@ -151,9 +164,10 @@ def summarize(df, ref, bins):
                 out.append(table([[run] + [int(reasons[run].get(k, 0)) for k in names] for run in cl], ["controller"] + names))
 
         # 4. Catch rate per bin
-        for col, edges, label, names in bins:
+        for col, specs, label in bins:
             if col not in d.columns or d[col].nunique() < 2:
                 continue
+            edges, names = pick_bins(d[col], specs)
             cats = pd.cut(d[col], edges, labels=names, include_lowest=True)
             g = d.assign(bin=cats).groupby(["bin", "run"], observed=False)["success"].mean().unstack("run")
             g = g[[run for run in runs if run in g.columns]]
@@ -175,14 +189,22 @@ def main():
     args = parser.parse_args()
     df = load(os.path.join(args.results_dir, args.exp), args.conditions)
     ref = args.ref if args.ref in df["run"].unique() else "classical_multi"
-    # (column, bin edges, table label, bin names or None for the interval)
+    # (column, [(bin edges, bin names or None for the interval), ...] per experiment range, table label)
     bins = [
-        ("vel_noise_std", [0.05, 0.0933, 0.1367, 0.18], "velocity noise std (m/s)", ["0.05-0.09", "0.09-0.14", "0.14-0.18"]),
-        ("drag_loss_pct", [0, 4, 8, 14], "speed lost to drag over 1 s (%)", ["0-4", "4-8", "8-13"]),
-        ("act_delay_steps", [-0.5, 0.5, 1.5, 2.5], "action delay (steps of 40 ms)", ["0", "1", "2"]),
-        ("flight_time", [0.6, 0.7, 0.8, 0.9, 1.0], "flight time (s)", None),
-        ("launch_az_deg", [-60, -30, 0, 30, 60], "launch azimuth (deg)", None),
-        ("home_to_target", [0.0, 0.2, 0.3, 0.4, 0.5, 0.8], "home-to-target distance (m)", None),
+        ("pos_noise_std", [([0.005, 0.01, 0.015, 0.02], ["5-10", "10-15", "15-20"])], "position noise std (mm)"),
+        ("vel_noise_std", [([0.05, 0.0933, 0.1367, 0.18], ["0.05-0.09", "0.09-0.14", "0.14-0.18"]),     # exp02
+                           ([0.1, 0.2, 0.3, 0.4], ["0.1-0.2", "0.2-0.3", "0.3-0.4"])], "velocity noise std (m/s)"),
+        ("drag_loss_pct", [([0, 4, 8, 14], ["0-4", "4-8", "8-13"]),                                     # exp02
+                           ([0, 10, 20, 36], ["0-10", "10-20", "20-35"])], "speed lost to drag over 1 s (%)"),
+        ("wind_N", [([0, 0.01, 0.02, 0.03, 0.04], ["0-0.01", "0.01-0.02", "0.02-0.03", "0.03-0.04"])], "wind force (N)"),
+        ("crosswind_N", [([0, 0.01, 0.02, 0.04], ["0-0.01", "0.01-0.02", "0.02-0.04"])],
+         "wind across the throw (N)"),
+        ("act_delay_steps", "int", "action delay (steps of 40 ms)"),
+        ("pid_gain_min", [([0.5, 0.6, 0.75, 1.5], ["0.50-0.60", "0.60-0.75", "0.75-1.50"])],
+         "weakest joint's PID gain scale"),
+        ("flight_time", [([0.6, 0.7, 0.8, 0.9, 1.0], None)], "flight time (s)"),
+        ("launch_az_deg", [([-60, -30, 0, 30, 60], None)], "launch azimuth (deg)"),
+        ("home_to_target", [([0.0, 0.2, 0.3, 0.4, 0.5, 0.8], None)], "home-to-target distance (m)"),
     ]
     text = summarize(df, ref, bins)
     print(text)

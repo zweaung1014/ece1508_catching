@@ -97,33 +97,40 @@ ik_config = {
     "gain": 1.0,
 }
 
-# Define the Randomization Params
-## Arm Joints
-k_arm = np.array([0.75, 1.25])
+# Define the Randomization Params (drawn per throw; ranges of exp03, see results/exp03_harder/README.md)
+## Arm Joints: each joint's PID gains are scaled by a factor in this range (payload / tuning differences)
+k_arm = np.array([0.5, 1.5])
 ## Ball (sphere)
 object_radius = np.array([0.035, 0.045])
 object_mass = np.array([0.035, 0.075])
 # Air drag: damping b on the ball's free joint gives the force -b*v, so the speed decays as exp(-(b/m) t).
-# b is drawn per throw; at 0.005 a 35 g ball loses ~13% of its speed over 1 s (a 75 g ball ~6.5%).
-# Throws are aimed as if there were no drag, so with drag the ball falls a bit short of the aim point.
-object_damping = np.array([0.0, 0.005])
+# At 0.015 a 35 g ball loses ~35% of its speed over 1 s (a 75 g ball ~18%), about a light foam ball.
+object_damping = np.array([0.0, 0.015])
+## Wind: constant horizontal force on the ball after release, magnitude drawn from this range (N),
+# direction uniform. 0.04 N is about what a 5 m/s breeze puts on a 4 cm ball (0.5 rho Cd A v^2).
+wind_force = np.array([0.0, 0.04])
+## Throw aim: True = the launch velocity accounts for the ball's drag and wind, so the true path still
+# passes through the target point (every throw stays catchable; the path is just not a parabola).
+# False = aimed as if there were no drag or wind (exp02), so the ball misses the aim point.
+aim_with_disturbances = True
 object_static = np.array([0.5, 0.75])
 ## Gravity: -9.81 +/- gravity_noise (0 = fixed at 9.81)
 gravity_noise = 0.0
 ## Observation Noise (Gaussian std)
 k_obs_arm = 0.001
 k_obs_hoop = 0.001
-k_obs_object = 0.005
-# Ball velocity noise: the std is drawn per throw from this range (m/s).
-# 0.05 is an easy tracker; 0.18 is a tracker differencing its own 5 mm-noise positions at 25 Hz.
-k_obs_object_vel = np.array([0.05, 0.18])
-## Actions Noise
-k_act = 0.025
+# Ball position noise: the std is drawn per throw from this range (m); a good to mediocre depth camera at 2-3 m.
+k_obs_object = np.array([0.005, 0.02])
+# Ball velocity noise: the std is drawn per throw from this range (m/s); lightly filtered differences
+# of those positions (unfiltered differences at 25 Hz would be ~0.18-0.7 m/s).
+k_obs_object_vel = np.array([0.1, 0.4])
+## Actions Noise: the torque of each joint is scaled by N(1, k_act) on every physics step
+k_act = 0.10
 ## Action Delay
 # Length of the joint-target buffer, drawn per throw: 1 = the arm follows the latest command,
-# 2 / 3 = the command from 1 / 2 control steps (40 / 80 ms) ago.
+# n = the command from n - 1 control steps (40 ms each) ago; up to 4 steps (160 ms).
 act_delay = {
-    'arm': [1, 2, 3],
+    'arm': [1, 2, 3, 4, 5],
 }
 
 ## Define PID params for the arm.

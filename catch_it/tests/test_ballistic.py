@@ -3,10 +3,12 @@ Author: Zwe Min Htet Aung
 ABOUT: checks of the ballistic predictor (gym_dcmm/classical/ballistic.py) and the per-throw disturbances.
 1. Eqs. (2)-(3) of Campana & Laumond describe the same path as Eq. (1).
 2. The least-squares fit recovers an exact state (single read, multi read, fitted g).
-3. DragPath equals the parabola at k = 0 and matches a fine numerical integration for k > 0.
-4. DragPath matches the ball's free flight in the MuJoCo env (random drag, RK4) to < 1 mm, and at the
-   strongest drag (b = 0.005, 35 g ball) the ball loses ~13% of its speed per second.
-5. The per-throw disturbances are the same for the same seed and stay inside their ranges.
+3. DragPath equals the parabola at k = 0 and matches a fine numerical integration with drag and wind.
+4. DragPath matches the ball's free flight in the MuJoCo env (random drag and wind, RK4) to < 1 mm, and at
+   the strongest drag (b = 0.015, 35 g ball) the ball loses ~35% of its speed per second.
+5. Throws aimed with the drag and wind pass through their target point.
+6. The per-throw disturbances are the same for the same seed, stay inside their ranges, and leave each
+   seed's throw (target, flight time, ball) the same as in exp01.
 
 Run from catch_it/:  python tests/test_ballistic.py     (pytest also works if installed)
 """
@@ -24,6 +26,13 @@ def make_env():
     return DcmmVecEnv(task="HoopCatch", viewer=False, imshow_cam=False, env_time=2.5, steps_per_policy=20)
 
 
+def true_path(env, t_s=None):
+    """The ball's true path from its launch state (arm-base frame), drag and wind included."""
+    return DragPath(env.object_pos3d - env.arm_base_pos, env.object_vel6d[:3],
+                    env.throw_time if t_s is None else t_s, -env.Dcmm.model.opt.gravity[2],
+                    env.object_damping / env.object_mass, env.wind_force / env.object_mass)
+
+
 def fly(env, seed):
     """Release the ball (hoop held still) and record its true path until it touches anything.
     Returns the true DragPath and a list of (time, position, velocity) in flight."""
@@ -37,12 +46,26 @@ def fly(env, seed):
         if env.throw_time is None:
             continue
         if path is None:
-            path = DragPath(env.object_pos3d - env.arm_base_pos, env.object_vel6d[:3], env.throw_time,
-                            -env.Dcmm.model.opt.gravity[2], env.object_damping / env.object_mass)
+            path = true_path(env)
         if env.ball_touched or done:
             break
         samples.append((k * dt, env._get_object_pos3d(), env._get_object_v_lin_3d()))
     return path, samples
+
+
+class override:
+    """Temporarily set DcmmCfg attributes."""
+    def __init__(self, **kw):
+        self.kw = kw
+
+    def __enter__(self):
+        self.saved = {k: getattr(DcmmCfg, k) for k in self.kw}
+        for k, v in self.kw.items():
+            setattr(DcmmCfg, k, v)
+
+    def __exit__(self, *exc):
+        for k, v in self.saved.items():
+            setattr(DcmmCfg, k, v)
 
 
 def test_plane_equations_match_eq1():
@@ -77,29 +100,37 @@ def test_fit_recovers_exact_state():
     assert np.allclose(est.position(t), pos, atol=1e-7)
 
 
-def test_drag_path():
-    c0, v0, t_s, g = np.array([0.3, 2.0, 0.9]), np.array([-0.5, -3.5, 1.2]), 0.62, 9.81
-    t = t_s + np.linspace(0.0, 1.2, 61)
-    # k = 0 is the parabola
-    par, drag0 = Parabola(c0, v0, t_s, g), DragPath(c0, v0, t_s, g, 0.0)
-    assert np.allclose(drag0.position(t), par.position(t), atol=1e-12)
-    assert np.allclose(drag0.direction(t), par.direction(t), atol=1e-9)
-    # Tiny k is continuous with k = 0
-    assert np.allclose(DragPath(c0, v0, t_s, g, 1e-6).position(t), par.position(t), atol=1e-5)
-    # k > 0 matches a fine RK4 integration of dv/dt = -g e_z - k v
-    k, h = 0.143, 1e-4
-    path = DragPath(c0, v0, t_s, g, k)
-    acc = lambda v: np.array([0.0, 0.0, -g]) - k * v
+def rk4(c0, v0, g, k, a_extra, T, h=1e-4):
+    acc = lambda v: np.array([0.0, 0.0, -g]) + a_extra - k * v
     p, v = c0.copy(), v0.copy()
-    for _ in range(int(round(1.2 / h))):
+    for _ in range(int(round(T / h))):
         k1v, k1p = acc(v), v
         k2v, k2p = acc(v + 0.5 * h * k1v), v + 0.5 * h * k1v
         k3v, k3p = acc(v + 0.5 * h * k2v), v + 0.5 * h * k2v
         k4v, k4p = acc(v + h * k3v), v + h * k3v
         p = p + h / 6 * (k1p + 2 * k2p + 2 * k3p + k4p)
         v = v + h / 6 * (k1v + 2 * k2v + 2 * k3v + k4v)
-    assert np.allclose(path.position(t_s + 1.2), p, atol=1e-9)
-    assert np.allclose(path.velocity(t_s + 1.2), v, atol=1e-9)
+    return p, v
+
+
+def test_drag_path():
+    c0, v0, t_s, g = np.array([0.3, 2.0, 0.9]), np.array([-0.5, -3.5, 1.2]), 0.62, 9.81
+    t = t_s + np.linspace(0.0, 1.2, 61)
+    # k = 0, no wind is the parabola
+    par, drag0 = Parabola(c0, v0, t_s, g), DragPath(c0, v0, t_s, g, 0.0)
+    assert np.allclose(drag0.position(t), par.position(t), atol=1e-12)
+    assert np.allclose(drag0.direction(t), par.direction(t), atol=1e-9)
+    # Tiny k is continuous with k = 0, with and without wind
+    wind = np.array([0.6, -0.8, 0.0])
+    assert np.allclose(DragPath(c0, v0, t_s, g, 1e-6).position(t), par.position(t), atol=1e-5)
+    assert np.allclose(DragPath(c0, v0, t_s, g, 1e-6, wind).position(t), DragPath(c0, v0, t_s, g, 0.0, wind).position(t),
+                       atol=1e-5)
+    # Drag and/or wind match a fine RK4 integration of dv/dt = -g e_z + a_extra - k v
+    for k, a_extra in [(0.43, np.zeros(3)), (0.43, wind), (0.0, wind)]:
+        path = DragPath(c0, v0, t_s, g, k, a_extra)
+        p, v = rk4(c0, v0, g, k, a_extra, 1.2)
+        assert np.allclose(path.position(t_s + 1.2), p, atol=1e-9)
+        assert np.allclose(path.velocity(t_s + 1.2), v, atol=1e-9)
 
 
 def test_matches_mujoco_flight(seeds=(0, 1, 2, 3, 4, 5, 6, 7)):
@@ -110,32 +141,51 @@ def test_matches_mujoco_flight(seeds=(0, 1, 2, 3, 4, 5, 6, 7)):
         for t, p, _ in samples:
             worst = max(worst, np.linalg.norm(p - path.position(t)))
     env.close()
-    print("worst free-flight prediction error (random drag): {:.2e} m".format(worst))
+    print("worst free-flight prediction error (random drag and wind): {:.2e} m".format(worst))
     assert worst < 1e-3
 
 
 def test_strongest_drag():
-    saved = DcmmCfg.object_damping, DcmmCfg.object_mass
-    DcmmCfg.object_damping, DcmmCfg.object_mass = np.array([0.005, 0.005]), np.array([0.035, 0.035])
-    try:
+    with override(object_damping=np.array([0.015, 0.015]), object_mass=np.array([0.035, 0.035]),
+                  wind_force=np.array([0.0, 0.0])):
         env = make_env()
         worst, k_meas = 0.0, []
         for seed in (0, 1, 2):
             path, samples = fly(env, seed)
             for t, p, _ in samples:
                 worst = max(worst, np.linalg.norm(p - path.position(t)))
-            # Horizontal speed decays as exp(-k t) (gravity is vertical)
+            # Horizontal speed decays as exp(-k t) (gravity is vertical, no wind)
             (t0, _, v0), (t1, _, v1) = samples[0], samples[-1]
             k_meas.append(np.log(np.linalg.norm(v0[:2]) / np.linalg.norm(v1[:2])) / (t1 - t0))
         env.close()
-    finally:
-        DcmmCfg.object_damping, DcmmCfg.object_mass = saved
     k = float(np.mean(k_meas))
     print("strongest drag: path error {:.2e} m, k = {:.4f} 1/s (expected {:.4f}), speed lost over 1 s = {:.1%}".format(
-        worst, k, 0.005 / 0.035, 1 - np.exp(-k)))
+        worst, k, 0.015 / 0.035, 1 - np.exp(-k)))
     assert worst < 1e-3
-    assert abs(k - 0.005 / 0.035) < 0.01 * 0.005 / 0.035
-    assert 0.12 < 1 - np.exp(-k) < 0.14
+    assert abs(k - 0.015 / 0.035) < 0.01 * 0.015 / 0.035
+    assert 0.33 < 1 - np.exp(-k) < 0.37
+
+
+def test_aimed_throws_hit_target():
+    """With the strongest drag and wind, the aimed throw's true path passes through the target at T."""
+    worst = 0.0
+    with override(object_damping=np.array([0.015, 0.015]), object_mass=np.array([0.035, 0.035]),
+                  wind_force=np.array([0.04, 0.04])):
+        env = make_env()
+        for seed in range(50):
+            env.reset(seed=seed)
+            path = true_path(env, t_s=0.0)
+            worst = max(worst, np.linalg.norm(path.position(env.throw_flight_time) - env.throw_target))
+            assert np.allclose(path.velocity(env.throw_flight_time), env.throw_arrival_vel, atol=1e-9)
+            assert abs(np.linalg.norm(env.wind_force) - 0.04) < 1e-12
+        # The same throws aimed as if there were no drag or wind miss the target
+        with override(aim_with_disturbances=False):
+            env.reset(seed=0)
+            miss = np.linalg.norm(true_path(env, t_s=0.0).position(env.throw_flight_time) - env.throw_target)
+        env.close()
+    print("aimed throws at the strongest drag and wind: worst target miss {:.1e} m (unaimed: {:.2f} m)".format(worst, miss))
+    assert worst < 1e-9
+    assert miss > 0.05
 
 
 def test_per_throw_disturbances():
@@ -143,18 +193,23 @@ def test_per_throw_disturbances():
     draws = []
     for seed in range(300):
         env.reset(seed=seed)
-        draws.append((env.k_obs_object_vel, env.object_damping, env.act_delay_steps, env.Dcmm.model.opt.gravity[2]))
+        draws.append((env.k_obs_object, env.k_obs_object_vel, env.object_damping, env.act_delay_steps,
+                      np.linalg.norm(env.wind_force), env.wind_force[2], env.Dcmm.model.opt.gravity[2]))
     draws = np.array(draws)
-    assert np.all((draws[:, 0] >= 0.05) & (draws[:, 0] <= 0.18))
-    assert np.all((draws[:, 1] >= 0.0) & (draws[:, 1] <= 0.005))
-    assert set(draws[:, 2].astype(int)) == {0, 1, 2}
-    assert np.allclose(draws[:, 3], -9.81)
+    assert np.all((draws[:, 0] >= 0.005) & (draws[:, 0] <= 0.02))
+    assert np.all((draws[:, 1] >= 0.1) & (draws[:, 1] <= 0.4))
+    assert np.all((draws[:, 2] >= 0.0) & (draws[:, 2] <= 0.015))
+    assert set(draws[:, 3].astype(int)) == {0, 1, 2, 3, 4}
+    assert np.all((draws[:, 4] >= 0.0) & (draws[:, 4] <= 0.04)) and np.all(draws[:, 5] == 0.0)
+    assert np.allclose(draws[:, 6], -9.81)
     # Same seed, same throw and disturbances
     env.reset(seed=7)
-    a = (env.k_obs_object_vel, env.object_damping, env.act_delay_steps, env.throw_target.copy())
+    a = (env.k_obs_object, env.k_obs_object_vel, env.object_damping, env.act_delay_steps, env.throw_target.copy(),
+         env.wind_force.copy())
     env.reset(seed=7)
-    b = (env.k_obs_object_vel, env.object_damping, env.act_delay_steps, env.throw_target.copy())
-    assert a[:3] == b[:3] and np.allclose(a[3], b[3])
+    b = (env.k_obs_object, env.k_obs_object_vel, env.object_damping, env.act_delay_steps, env.throw_target.copy(),
+         env.wind_force.copy())
+    assert a[:4] == b[:4] and np.allclose(a[4], b[4]) and np.allclose(a[5], b[5])
     # Same seed, same throw geometry and ball as exp01 (the new draws come after them)
     ref = os.path.join(CATCH_IT, "results", "exp01_one_factor", "nominal", "oracle.csv")
     if os.path.exists(ref):
@@ -167,6 +222,8 @@ def test_per_throw_disturbances():
             assert np.isclose(t[2], old.loc[seed, "target_z"])
             assert np.isclose(env.throw_flight_time, old.loc[seed, "flight_time"])
             assert np.isclose(env.object_mass, old.loc[seed, "ball_mass"])
+            launch = env.object_pos3d - env.arm_base_pos
+            assert np.isclose(np.hypot(launch[0], launch[1]), old.loc[seed, "launch_r"])
     env.close()
 
 
@@ -176,5 +233,6 @@ if __name__ == "__main__":
     test_drag_path()
     test_matches_mujoco_flight()
     test_strongest_drag()
+    test_aimed_throws_hit_target()
     test_per_throw_disturbances()
     print("all ballistic tests passed")

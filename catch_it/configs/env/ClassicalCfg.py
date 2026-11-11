@@ -2,14 +2,16 @@
 Author: Zwe Min Htet Aung
 ABOUT: settings of the classical (non-learning) catcher, gym_dcmm/classical/catcher.py.
 The catcher sees the same observation and uses the same 5-D action interface as the RL policy.
-Everything here is what the catcher *assumes*; the stress-test conditions in eval_catch.py change the
-simulator, not these values.
+Everything here is what the catcher *assumes*; the env (DcmmCfg) sets what really happens.
 """
 import numpy as np
 
-## Sensor model the catcher assumes (tracker spec). Fixed even when a test condition changes the real noise.
-pos_sigma = 0.005       # std of the observed ball position (m)
-vel_sigma = 0.05        # std of the observed ball velocity (m/s)
+## Sensor model the catcher assumes (tracker spec).
+# Set from the env's noise ranges, the way an engineer sets a filter from the sensor's data sheet:
+# the middle of DcmmCfg.k_obs_object (5-20 mm) and DcmmCfg.k_obs_object_vel (0.1-0.4 m/s).
+# exp01/exp02 used 0.005 and 0.05 (their noise levels).
+pos_sigma = 0.0125      # std of the observed ball position (m)
+vel_sigma = 0.25        # std of the observed ball velocity (m/s)
 
 ## Gravity model
 g_nominal = 9.81        # m/s^2, the parabola assumes this unless the vertical acceleration is fitted
@@ -19,8 +21,11 @@ fit_gravity = True
 g_prior_sigma = 0.5     # m/s^2
 
 ## Release detection: the ball has left the launch point when BOTH hold
-release_disp = 0.03     # observed position is this far (m) from the averaged rest position
-release_speed = 1.0     # observed speed (m/s) is above this
+# About 4x the largest noise std, so noise alone does not trigger it (with exp02's 0.03 / 1.0, the
+# exp03 noise triggered it on ~6% of throws while the ball was still held). A thrown ball moves
+# 15-20 cm per control step, so the real release is still seen at the first read after it.
+release_disp = 0.08     # observed position is this far (m) from the averaged rest position
+release_speed = 1.6     # observed speed (m/s) is above this
 
 ## Region where the hoop can catch (arm-base frame, azimuth measured from +y).
 # From the hoop reachability study (docs/hoop_rl_design.md section 3). Kept separate from

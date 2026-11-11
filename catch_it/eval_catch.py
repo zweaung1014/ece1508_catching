@@ -2,9 +2,9 @@
 Author: Zwe Min Htet Aung
 ABOUT: evaluate any HoopCatch controller on a fixed list of seeds, so every controller faces exactly the
 same throws (same seed -> same throw, ball, disturbances, PID gains and noise sequence).
-The env runs as configured in DcmmCfg; every throw draws its own velocity-noise std, drag and action
-delay, and each CSV row logs the values it got. Writes one CSV row per episode, plus a JSON file with
-the run settings (env and catcher config, git commit).
+The env runs as configured in DcmmCfg; every throw draws its own noise levels, drag, wind, action delay
+and PID gains, and each CSV row logs the values it got. Writes one CSV row per episode, plus a JSON file
+with the run settings (env and catcher config, git commit).
 
 Controllers:
   random            untrained-policy stand-in: N(0, 1) actions, clipped
@@ -12,11 +12,11 @@ Controllers:
   rl                a PPO checkpoint, mean action (needs --checkpoint)
   classical_single  parabola from one read after release, open loop on the ball
   classical_multi   parabola re-fitted to every read, re-planned every step
-  classical_perfect diagnostic: path from the true release state, gravity and drag
+  classical_perfect diagnostic: path from the true release state, gravity, drag and wind
 
 Usage (from catch_it/, env active):
-  python eval_catch.py --exp exp02_randomized --controller classical_multi     # test seeds 10000-14999
-  python eval_catch.py --exp exp02_randomized --controller rl --checkpoint outputs/<run>/nn/best.pth
+  python eval_catch.py --exp exp03_harder --controller classical_multi         # test seeds 10000-14999
+  python eval_catch.py --exp exp03_harder --controller rl --checkpoint outputs/<run>/nn/best.pth
   python eval_catch.py --exp scratch --controller oracle --seeds 0:500          # validation seeds
   python eval_catch.py --exp scratch --controller classical_single --seeds 10000:10010 --viewer --workers 1
 Output: results/<exp>/<controller>[_<tag>].csv and .json
@@ -115,7 +115,7 @@ class ClassicalController:
         if self.mode == "perfect_state" and env.throw_time is not None:
             privileged = {"p0": env.object_pos3d - env.arm_base_pos, "v0": env.object_vel6d[:3].copy(),
                           "g": -env.Dcmm.model.opt.gravity[2], "k": env.object_damping / env.object_mass,
-                          "t_throw": env.throw_time}
+                          "a_wind": env.wind_force / env.object_mass, "t_throw": env.throw_time}
         return self.catcher.act(obs, privileged)
 
 
@@ -157,16 +157,28 @@ def run_episode(env, ctrl, seed, controller_name):
     v0 = env.object_vel6d[:3].copy()
     g = -env.Dcmm.model.opt.gravity[2]
     drag_rate = env.object_damping / env.object_mass       # 1/s; speed decays as exp(-drag_rate t)
+    a_wind = env.wind_force / env.object_mass                # m/s^2
     target = env.throw_target
     v_arr = env.throw_arrival_vel
-    # How far the drag carried the true path from the aim point (closest approach)
-    ts = np.linspace(0.0, 1.5 * env.throw_flight_time, 301)
-    aim_miss = float(np.min(np.linalg.norm(DragPath(launch, v0, 0.0, g, drag_rate).position(ts) - target, axis=1)))
+    # Wind across / along the throw's horizontal direction (along > 0 pushes the ball forward)
+    heading = (target - launch)[0:2] / np.linalg.norm((target - launch)[0:2])
+    wind_along = float(np.dot(env.wind_force[0:2], heading))
+    wind_across = float(abs(env.wind_force[0] * heading[1] - env.wind_force[1] * heading[0]))
+    # Distance between the true path and the aim point (closest approach); ~0 when the throw is aimed
+    # with the drag and wind (DcmmCfg.aim_with_disturbances), else how far they carried the ball
+    ts = np.linspace(0.0, 1.5 * env.throw_flight_time, 1501)
+    aim_miss = float(np.min(np.linalg.norm(DragPath(launch, v0, 0.0, g, drag_rate, a_wind).position(ts) - target,
+                                           axis=1)))
+    pid_gain = env.k_arm * (DcmmCfg.k_arm[1] - DcmmCfg.k_arm[0]) + DcmmCfg.k_arm[0]   # per-joint scale
     row = {
         "seed": seed, "controller": controller_name,
         # Per-throw disturbances
-        "vel_noise_std": env.k_obs_object_vel, "drag_b": env.object_damping, "drag_rate": drag_rate,
-        "act_delay_steps": env.act_delay_steps, "aim_miss": aim_miss,
+        "pos_noise_std": env.k_obs_object, "vel_noise_std": env.k_obs_object_vel,
+        "drag_b": env.object_damping, "drag_rate": drag_rate,
+        "wind_N": float(np.linalg.norm(env.wind_force)), "crosswind_N": wind_across, "tailwind_N": wind_along,
+        "act_delay_steps": env.act_delay_steps,
+        "pid_gain_mean": float(np.mean(pid_gain)), "pid_gain_min": float(np.min(pid_gain)),
+        "aim_miss": aim_miss,
         "outcome": OUTCOME_NAMES[info["outcome"]], "success": int(info["success"]),
         "steps": steps, "episode_time": round(info["env_time"], 4), "return": ret,
         "min_ball_dist": info["min_ball_dist"], "min_path_dist": info["min_path_dist"],
@@ -190,7 +202,7 @@ def run_episode(env, ctrl, seed, controller_name):
             "feasible", "in_region", "g_hat", "pred_err", "pred_err_perp", "hoop_err_at_tstar", "axis_err_at_tstar_deg"]
     row.update({k: np.nan for k in keys})
     if log is not None and env.throw_time is not None and not np.isnan(log["t_star"]):
-        truth = DragPath(launch, v0, env.throw_time, g, drag_rate)   # the ball's true path, drag included
+        truth = DragPath(launch, v0, env.throw_time, g, drag_rate, a_wind)   # the ball's true path, drag and wind included
         t_star = log["t_star"]
         p_true = truth.position(t_star)
         d_true = truth.direction(t_star)

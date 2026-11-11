@@ -34,7 +34,7 @@ pip install -r requirements.txt
 
 Run everything from `catch_it/` with the env active.
 
-**Check the environment.** The oracle is a scripted controller that knows where the throw is aimed. It should catch about 95% of throws. If it doesn't, the environment is broken.
+**Check the environment.** The oracle is a scripted controller that knows where the throw is aimed. Under the default disturbances (below) it catches about 83% of throws, and about 97% of those with no action delay. Much less means the environment is broken.
 
 ```bash
 cd gym_dcmm/envs
@@ -75,13 +75,13 @@ python train_DCMM.py task=HoopCatch test=True num_envs=8 device_id=0 \
 
 Memory-limited runs, resuming, and gotchas are covered in [RUN_COMMANDS.md](catch_it/RUN_COMMANDS.md).
 
-**Compare against the classical baseline.** Every controller runs on the same 5000 test throws (seeds 10000–14999). Each throw draws its own velocity noise, air drag and action delay. Details: [docs/classical_baseline.md](docs/classical_baseline.md).
+**Compare against the classical baseline.** Every controller runs on the same 5000 test throws (seeds 10000–14999). Each throw draws its own sensor noise, air drag, wind, action delay and PID gains. Details: [docs/classical_baseline.md](docs/classical_baseline.md).
 
 ```bash
 python eval_catch.py --exp scratch --controller classical_multi                        # classical catcher, re-plans every step
 python eval_catch.py --exp scratch --controller rl --checkpoint outputs/<run>/nn/<file>.pth
-EXP=exp02_randomized CHECKPOINT=outputs/<run>/nn/<file>.pth bash run_eval.sh          # all controllers
-python analyze_results.py --exp exp02_randomized                                      # catch rates, CIs, paired tests
+EXP=exp03_harder CHECKPOINT=outputs/<run>/nn/<file>.pth bash run_eval.sh              # all controllers
+python analyze_results.py --exp exp03_harder                                          # catch rates, CIs, paired tests
 ```
 
 ## MDP definition
@@ -101,7 +101,7 @@ Each throw is aimed at a target point `p_T`:
 - **Catch zone:** 0.35–0.65 m from the arm base, within ±45° of straight ahead, 0.3–0.8 m above the arm base.
 - **Launch point:** 2–3 m away, within ±60° of straight ahead, 0.8–1.6 m above the floor.
 - **Flight time:** `T` is 0.6–1.0 s.
-- **Launch velocity:** `v0 = (p_T − p_0)/T − ½·g·T`.
+- **Launch velocity:** `v0 = (p_T − p_0)/T − ½·g·T` without drag or wind; with them, solved from the closed-form drag-and-wind path so the ball still passes through `p_T` at `T`.
 
 The resulting launch speeds are 3.8–5.3 m/s, and the ball is always descending when it arrives.
 
@@ -114,8 +114,8 @@ The resulting launch speeds are 3.8–5.3 m/s, and the ball is always descending
 | 6–8 | Hoop linear velocity | 3 | N(0, 0.001) |
 | 9–14 | Arm joint positions | 6 | N(0, 0.001) |
 | 15–20 | Arm joint velocities | 6 | N(0, 0.001) |
-| 21–23 | Ball position | 3 | N(0, 0.005) |
-| 24–26 | Ball linear velocity | 3 | N(0, 0.05) |
+| 21–23 | Ball position | 3 | N(0, σ_p), σ_p 5–20 mm per throw |
+| 24–26 | Ball linear velocity | 3 | N(0, σ_v), σ_v 0.1–0.4 m/s per throw |
 | 27–29 | Ball position minus hoop position | 3 | from the noisy values |
 | 30–34 | Previous action | 5 | none |
 
@@ -164,13 +164,20 @@ PPO scales all rewards by 0.1.
 - The reward uses the true ball state, while the policy sees only noisy observations.
 - Catches are checked at every 2 ms physics step, because the ball can travel about 20 cm in one policy step.
 
-### Domain randomization (per episode)
+### Domain randomization (per throw)
 
 - Ball radius: 0.035–0.045 m.
 - Ball mass: 0.035–0.075 kg.
-- Gravity: −9.81 ± 0.5 m/s².
-- Arm PID gains: ×0.75–1.25 per joint.
-- Torque noise: ×N(1, 0.025) on each physics step.
+- Air drag: damping 0–0.015 on the ball (a 35 g ball loses up to ~35% of its speed per second).
+- Wind: constant horizontal force 0–0.04 N in a random direction after release.
+- Throws are aimed with the drag and wind, so the ball still passes through `p_T`.
+- Gravity: fixed at −9.81 m/s².
+- Ball observation noise: position std 5–20 mm, velocity std 0.1–0.4 m/s.
+- Action delay: the arm follows the command from 0–4 steps ago (0–160 ms).
+- Arm PID gains: ×0.5–1.5 per joint.
+- Torque noise: ×N(1, 0.10) on each physics step.
+
+These are the classical baseline's exp03 test settings ([results/exp03_harder](catch_it/results/exp03_harder/)).
 
 For the full design and tuning notes, see [docs/hoop_rl_design.md](docs/hoop_rl_design.md).
 

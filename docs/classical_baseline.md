@@ -24,23 +24,23 @@ The paper's point-robot takeoff state (c_s, ċ_s) is replaced by the ball's esti
 - Eq. 2: `z(x_θ)`, the height along the path.
 - Eq. 3: slope `ż/ẋ_θs`, the ball's direction of travel. The hoop axis is set to the opposite direction, so the opening faces the incoming ball.
 
-The simulator is exactly ballistic (no drag, RK4 integrator): from the true release state, Eq. 1 matches MuJoCo's ball to 3·10⁻¹⁴ m (`tests/test_ballistic.py`).
+With drag and wind off, the simulator is exactly ballistic (RK4 integrator): from the true release state, Eq. 1 matches MuJoCo's ball to 3·10⁻¹⁴ m. With them on (exp02 on), the ball's true path is `DragPath` in `ballistic.py`, the closed form of linear drag plus a constant wind force, which matches MuJoCo to ~10⁻⁹ m (`tests/test_ballistic.py`). The catcher's parabola does not model either.
 
 ### Estimating the state from the observation
 
-The catcher reads the same noisy observation as the policy (ball position σ 5 mm, velocity σ 0.05 m/s, 25 Hz). Two details matter:
+The catcher reads the same noisy observation as the policy (25 Hz; in exp03 each throw draws a ball position σ of 5–20 mm and a velocity σ of 0.1–0.4 m/s). Two details matter:
 
 - **The first read after release has a wrong velocity.** The env's velocity is a finite difference over the last 40 ms, which still includes the hold. Its position is used; its velocity is not.
 - **A finite-difference velocity is the velocity 20 ms ago** (the middle of the window). The fit models it that way; ignoring it costs ~0.2 m/s vertically, a 10–18 cm miss.
 
-`fit_parabola` solves a weighted least-squares problem for the state at the latest read: position reads `p_i = c + ċ·τ_i − ½g·τ_i²·e_z`, velocity reads `v_j = ċ − g·(τ_j − Δt/2)·e_z`, weighted by 1/σ. With one position and one velocity read it is exactly determined. In multi-read mode the vertical acceleration is an extra unknown with a prior N(9.81, 0.5²), so it is learned from the data once enough reads exist (the env randomizes g by ±0.5 m/s²).
+`fit_parabola` solves a weighted least-squares problem for the state at the latest read: position reads `p_i = c + ċ·τ_i − ½g·τ_i²·e_z`, velocity reads `v_j = ċ − g·(τ_j − Δt/2)·e_z`, weighted by 1/σ. With one position and one velocity read it is exactly determined. In multi-read mode the vertical acceleration is an extra unknown with a prior N(9.81, 0.5²), so it is learned from the data once enough reads exist (exp01 randomized g by ±0.5 m/s²; since exp02 g is fixed, and the fitted value absorbs part of the drag). The weights use the assumed σ in `ClassicalCfg.py`: 12.5 mm and 0.25 m/s for exp03, the middle of its noise ranges (5 mm and 0.05 m/s up to exp02).
 
 ## 3. Catcher (`catcher.py`)
 
 Each control step (25 Hz):
 
 1. **Ready (ball held).** Average the ball's resting position. Move the hoop straight ahead to the middle of the reach region (0.5 m out, 0.55 m up) with its axis turned toward the launch point, 45° up. The middle minimizes the worst-case move, since throws often cross from one side to the other (a launch-side ready pose missed those).
-2. **Release.** The ball is released when it is > 3 cm from its rest position and its observed speed is > 1 m/s.
+2. **Release.** The ball is released when it is > 8 cm from its rest position and its observed speed is > 1.6 m/s (3 cm and 1 m/s up to exp02; with exp03's noise those triggered on ~6% of throws while the ball was still held).
 3. **Predict** (section 2), from the next read on (≈ 40–80 ms after release).
 4. **Choose the catch point.** Sample the predicted path every 10 ms. Keep points inside the reach region (0.35–0.65 m out, ±45°, 0.3–0.8 m up, from the reachability study in `hoop_rl_design.md` §3) and the hoop target box. For each point, `slack = time until the ball is there − time the hoop needs` (distance at 0.8 m/s, tilt at 2 rad/s, plus 0.1 s settle; below the interface caps of 1 m/s and 2.5 rad/s). Pick the point with slack ≥ 0 needing the least motion (translation + 0.2 m/rad × tilt); if none, the one with the most slack.
 5. **Servo.** The env oracle's servo law, aimed at the predicted point and axis instead of the privileged aim point, output as the same 5-D action as the policy. The hoop's own pose comes from the observation (position) and forward kinematics of the observed joint angles (orientation).
@@ -51,15 +51,15 @@ Modes:
 |---|---|---|
 | `single_read` | one read after release (position + velocity) | none: open loop on the ball |
 | `multi_read` | every read since release | re-fit and re-plan every step; keeps the chosen catch time, only re-selects if it becomes unreachable, and stops re-selecting 0.15 s before the catch |
-| `perfect_state` | true release state and gravity (diagnostic) | none |
+| `perfect_state` | true release state, gravity, drag and wind (diagnostic) | none |
 
 ### Fairness rules
 
-- The catcher reads only the observation dict. It never reads the throw target, arrival velocity or the episode's gravity (except `perfect_state`, which is a diagnostic).
+- The catcher reads only the observation dict. It never reads the throw target, arrival velocity, the episode's gravity, drag or wind (except `perfect_state`, which is a diagnostic).
 - Same action interface as RL, so the same limits: 0.04 m and 0.1 rad per step (1 m/s, 2.5 rad/s), 0.15 m target lead, workspace box, IK, PID, action delay.
 - The reach region is a fixed setting, separate from the throw sampler's `DcmmCfg.catch_zone`. A much wider assumed region (0.25–0.8 m, ±70°, 0.15–0.95 m) still caught 200/200 validation throws, so the region does not leak the aim zone.
 - It never draws from `np.random`, so a seed gives the same throw and the same noise to every controller.
-- Settings were tuned on validation seeds 0–499 only (in exp01's env). Test seeds 10000–14999 are for reporting.
+- Settings were tuned on validation seeds 0–499 only (in exp01's env). For exp03 the assumed sensor noise and the release thresholds were set from the new noise ranges and checked on validation seeds. Test seeds 10000–14999 are for reporting.
 
 ## 4. Experiment
 
@@ -71,33 +71,41 @@ Modes:
 | `classical_single` | 1 noisy read | open-loop baseline |
 | `classical_multi` | all noisy reads | main classical baseline |
 | `rl` | all noisy reads | the method |
-| `classical_perfect` | true release state, gravity and drag | diagnostic: planner + arm limits only |
+| `classical_perfect` | true release state, gravity, drag and wind | diagnostic: planner + arm limits only |
 | `oracle` | aim point, known before release | privileged reference |
 
-**Test setting** (from exp02 on): one setting, with every disturbance drawn at random for each throw (ranges in `DcmmCfg.py`):
+**Test setting** (exp03, the `DcmmCfg.py` defaults): one setting, with every disturbance drawn at random for each throw:
 
 | Disturbance | Per-throw draw |
 |---|---|
-| Ball velocity obs noise | Gaussian, std 0.05–0.18 m/s |
-| Air drag | damping b 0–0.005 on the ball (up to ~13% speed lost per second for a 35 g ball); the throw is aimed without drag, so the ball falls a bit short |
-| Action delay | the arm follows the command from 0, 1 or 2 steps ago (0/40/80 ms) |
+| Action delay | the arm follows the command from 0–4 steps ago (0–160 ms), equally likely |
+| Arm PID gains | each joint's gains ×0.5–1.5 |
+| Wind | constant horizontal force 0–0.04 N in a random direction, from release on (about a 5 m/s breeze on a 4 cm ball) |
+| Air drag | damping b 0–0.015 on the ball (up to ~35% speed lost per second for a 35 g ball) |
+| Ball position obs noise | Gaussian, std 5–20 mm |
+| Ball velocity obs noise | Gaussian, std 0.1–0.4 m/s |
+| Torque noise | ×N(1, 0.10) on each physics step |
 | Gravity | fixed at 9.81 |
 
-The rest stays on as before: ball position noise 5 mm, arm/hoop obs noise, 2.5% torque noise, PID gain, ball size and mass randomization. The catcher's assumptions stay fixed (no drag, `vel_sigma` 0.05). Each CSV row logs the values its throw drew (`vel_noise_std`, `drag_b`, `drag_rate`, `act_delay_steps`, `aim_miss`). exp01 instead changed one factor per condition; see `catch_it/results/exp01_one_factor/README.md`.
+- **Every throw is aimed with its drag and wind** (`DcmmCfg.aim_with_disturbances`), so its true path still passes through the target point: every throw stays catchable, the path is just not a parabola. Aimed as if there were no drag or wind, 26% of exp03's throws would never pass through the catch zone.
+- Unchanged: arm/hoop obs noise 0.001, ball radius 35–45 mm and mass 35–75 g, the throw sampler (target, launch point, flight time). A seed gives the same target, launch point, flight time and ball as in exp01 and exp02.
+- Each CSV row logs its throw's draws: `pos_noise_std`, `vel_noise_std`, `drag_b`, `drag_rate`, `wind_N`, `crosswind_N`, `tailwind_N`, `act_delay_steps`, `pid_gain_mean`, `pid_gain_min`, and `aim_miss` (~0 when aimed).
+- The catcher still assumes no drag, wind or delay; its assumed noise is set from the ranges above (`ClassicalCfg.py`).
+- Earlier settings: exp02 (smaller ranges, no wind, aimed without drag) and exp01 (one factor per condition); see the `README.md` in each `catch_it/results/` folder.
 
-**Metrics** (`analyze_results.py`): catch rate with a 95% Wilson interval; paired exact McNemar tests on the same seeds; outcome breakdown; rim hits, IK failures, hoop travel, action smoothness; for the classical modes, prediction error across the true (drag) path at the planned catch time, hoop tracking error, and the reason for each miss (not reachable in time > prediction > arm tracking > other); catch rate by velocity-noise std, drag, delay, flight time, launch azimuth and home-to-target distance. The disturbances are drawn independently, so each bin averages over the others.
+**Metrics** (`analyze_results.py`): catch rate with a 95% Wilson interval; paired exact McNemar tests on the same seeds; outcome breakdown; rim hits, IK failures, hoop travel, action smoothness; for the classical modes, prediction error across the true path (drag and wind included) at the planned catch time, hoop tracking error, and the reason for each miss (not reachable in time > prediction > arm tracking > other); catch rate by each per-throw disturbance (position and velocity noise, drag, wind, crosswind, delay, weakest PID gain), flight time, launch azimuth and home-to-target distance. The disturbances are drawn independently, so each bin averages over the others.
 
 ## 5. Running it
 
 From `catch_it/` with the env active:
 
 ```bash
-python tests/test_ballistic.py                                   # predictor, drag and disturbance checks
+python tests/test_ballistic.py                                   # predictor, drag, wind, aiming and disturbance checks
 python eval_catch.py --exp scratch --controller classical_multi  # 5000 test throws, ~3 min with 16 workers
 python eval_catch.py --exp scratch --controller classical_single --seeds 10000:10010 --viewer --workers 1   # watch
 python eval_catch.py --exp scratch --controller rl --checkpoint outputs/<run>/nn/<file>.pth
-EXP=exp02_randomized bash run_eval.sh                            # everything; CHECKPOINT=... adds RL
-python analyze_results.py --exp exp02_randomized                 # tables; --markdown results/<exp>/summary.md
+EXP=exp03_harder bash run_eval.sh                                # everything; CHECKPOINT=... adds RL
+python analyze_results.py --exp exp03_harder                     # tables; --markdown results/<exp>/summary.md
 ```
 
 Results go to `catch_it/results/<exp>/<controller>.csv`, with a `.json` next to each (seeds, git commit, full env and catcher settings). Commit the code before a run you keep, so the `.json` pins it. Each experiment folder gets a `README.md` saying what was varied.
@@ -106,8 +114,9 @@ Results go to `catch_it/results/<exp>/<controller>.csv`, with a `.json` next to 
 
 For whoever trains the RL policy:
 
-- **Must match between the two branches:** the observation and its noise (including the per-throw velocity-noise range), the action interface (step sizes, 0.15 m lead, workspace box, IK settings, PID gains and their randomization, the per-throw action delay, 25 Hz), the throw sampler (catch zone, launch zone, flight time, fixed gravity, drag range and ball randomization), the catch test, the end-of-episode conditions and the 2.5 s limit. Make env changes where both branches pull from, and evaluate both on the same commit (the `.json` records it).
-- **Train with the same randomization.** A policy trained without drag, delay and the noise range is tested out of distribution. The `DcmmCfg.py` defaults now include them, so training picks them up.
+- **Must match between the two branches:** the observation and its noise (including the per-throw position- and velocity-noise ranges), the action interface (step sizes, 0.15 m lead, workspace box, IK settings, PID gains and their randomization, the per-throw action delay, torque noise, 25 Hz), the throw sampler (catch zone, launch zone, flight time, fixed gravity, drag and wind ranges, aiming with them, ball randomization), the catch test, the end-of-episode conditions and the 2.5 s limit. Make env changes where both branches pull from, and evaluate both on the same commit (the `.json` records it).
+- **Train with the same randomization.** A policy trained without exp03's delay, PID, wind, drag and noise ranges is tested out of distribution. The `DcmmCfg.py` defaults are exp03's, so training picks them up.
+- **Give the policy a short history if the sensor noise stays this high.** The multi-read catcher averages ~20 reads per throw, so raising the noise cost it ~1.5 points; a memoryless MLP sees one frame, and at 0.4 m/s velocity noise its extrapolation 0.25 s ahead is off by ~10 cm. Stacking the last few ball observations (e.g. 4) gives it the same chance to average.
 - **Free to change:** reward terms and weights, PPO settings, network size, randomization used only during training (report it).
 - **Final numbers come from `eval_catch.py`** on test seeds 10000–14999, not from `train_DCMM.py test=True` (that mode does not fix the throws). Pick the checkpoint on validation seeds 0–499.
 - `eval_catch.py --controller rl` reads the MLP size from the checkpoint; if the observation vector changes, update the flattening in `RLController.act` to match `PPO_Hoop.obs2tensor`.
@@ -160,6 +169,10 @@ What it shows:
 
 ## 8. Env changes the RL branch needs too
 
-- `DcmmVecEnv.py` logs, for evaluation only: `self.throw_time` (env time of the release), `self.throw_flight_time`, and the per-throw draws `self.object_damping`, `self.act_delay_steps`, `self.k_obs_object_vel`.
-- Per-throw disturbances (exp02): `DcmmCfg.py` ranges for `k_obs_object_vel`, `object_damping`, `act_delay`, and `gravity_noise = 0`. `random_obs_noise()` draws the velocity-noise std last in `_reset_simulation()`, so the other draws for a seed are unchanged. `_get_obs` uses the per-throw std.
-- `_predict_path()` (reward shaping only) follows the drag path, so the shaping points at the ball's real path.
+The RL branch (`larry-catch`) is at `8510670`, before both exp02 and exp03. It needs:
+
+- `DcmmVecEnv.py` logs, for evaluation only: `self.throw_time` (env time of the release), `self.throw_flight_time`, and the per-throw draws `self.object_damping`, `self.act_delay_steps`, `self.k_obs_object`, `self.k_obs_object_vel`, `self.wind_force`.
+- Per-throw disturbances: the `DcmmCfg.py` ranges (`k_obs_object`, `k_obs_object_vel`, `object_damping`, `wind_force`, `act_delay`, `k_arm`, `k_act`, `gravity_noise = 0`, `aim_with_disturbances = True`).
+- Draw order in `_reset_simulation()`: ball, gravity, throw, PID, delay, then `random_obs_noise()` (velocity std, then position std) and `random_wind()` last, so a seed's throw, ball and PID draws stay the same. Then `aim_throw()` re-solves the launch velocity with the drag and wind (no random draws). `_get_obs` uses the per-throw stds.
+- The wind is applied at release through `data.xfrc_applied` on the ball (`step()`), and `ball_acceleration()` gives gravity + wind / mass.
+- `_predict_path()` (reward shaping only) follows the drag-and-wind path, so the shaping points at the ball's real path.

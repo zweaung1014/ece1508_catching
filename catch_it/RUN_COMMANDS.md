@@ -21,7 +21,8 @@ pgrep -af train_DCMM                         # leftover processes? kill with: pk
 ## 1. Check the environment (no learning)
 
 Run from `gym_dcmm/envs/`. The oracle is a privileged scripted controller that drives the hoop to the
-throw's aim point; it should catch ~95% of the throws. If it doesn't, the env is broken, not the policy.
+throw's aim point. Under the default (exp03) disturbances it catches ~83% of the throws (~97% with no
+action delay). Much less means the env is broken, not the policy.
 
 ```bash
 cd gym_dcmm/envs

@@ -86,30 +86,37 @@ class Parabola:
 
 class DragPath:
     """
-    Path of a ball with linear air drag: dv/dt = -g e_z - k v, with k = damping / mass (1/s).
-    This is the ball's true motion in the env (damping b on its free joint gives the force -b v).
-    Not part of Campana & Laumond; used for the ground truth and the perfect-state diagnostic.
+    Path of a ball with linear air drag and a constant extra acceleration (wind / mass):
+      dv/dt = a - k v,  a = -g e_z + a_extra,  k = damping / mass (1/s).
+    This is the ball's true motion in the env (damping b on its free joint gives the force -b v; the
+    wind is a constant force on the ball). Not part of Campana & Laumond; used for the ground truth
+    and the perfect-state diagnostic.
 
-    Closed form, with a = -g e_z and tau = t - t_s:
+    Closed form, with tau = t - t_s:
       v(t) = a/k + (c_dot_s - a/k) exp(-k tau)
       c(t) = c_s + (a/k) tau + (c_dot_s - a/k) (1 - exp(-k tau)) / k
-    k = 0 gives the parabola of Eq. (1).
+    k = 0: c(t) = c_s + c_dot_s tau + a tau^2 / 2, the parabola of Eq. (1) when a_extra = 0.
 
-    Args: as Parabola, plus k (1/s)
+    Args: as Parabola, plus k (1/s) and a_extra (3,) in m/s^2 (default none)
     """
-    def __init__(self, c_s, c_dot_s, t_s=0.0, g=9.81, k=0.0):
+    def __init__(self, c_s, c_dot_s, t_s=0.0, g=9.81, k=0.0, a_extra=None):
         self.c_s = np.asarray(c_s, dtype=np.float64).copy()
         self.c_dot_s = np.asarray(c_dot_s, dtype=np.float64).copy()
         self.t_s = float(t_s)
         self.g = float(g)
         self.k = float(k)
-        self._parabola = Parabola(self.c_s, self.c_dot_s, self.t_s, self.g) if self.k < 1e-9 else None
+        self.a_extra = np.zeros(3) if a_extra is None else np.asarray(a_extra, dtype=np.float64).copy()
+        self.a = -self.g * E_Z + self.a_extra
+        plain = self.k < 1e-9 and not np.any(self.a_extra)
+        self._parabola = Parabola(self.c_s, self.c_dot_s, self.t_s, self.g) if plain else None
 
     def position(self, t):
         if self._parabola is not None:
             return self._parabola.position(t)
         tau = np.asarray(t, dtype=np.float64) - self.t_s
-        a_k = -self.g / self.k * E_Z                                   # terminal velocity a/k
+        if self.k < 1e-9:
+            return self.c_s + np.multiply.outer(tau, self.c_dot_s) + 0.5 * np.multiply.outer(tau**2, self.a)
+        a_k = self.a / self.k                                           # terminal velocity a/k
         decay = -np.expm1(-self.k * tau) / self.k                      # (1 - exp(-k tau)) / k
         return self.c_s + np.multiply.outer(tau, a_k) + np.multiply.outer(decay, self.c_dot_s - a_k)
 
@@ -117,7 +124,9 @@ class DragPath:
         if self._parabola is not None:
             return self._parabola.velocity(t)
         tau = np.asarray(t, dtype=np.float64) - self.t_s
-        a_k = -self.g / self.k * E_Z
+        if self.k < 1e-9:
+            return self.c_dot_s + np.multiply.outer(tau, self.a)
+        a_k = self.a / self.k
         return a_k + np.multiply.outer(np.exp(-self.k * tau), self.c_dot_s - a_k)
 
     def direction(self, t):

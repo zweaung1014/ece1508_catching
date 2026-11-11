@@ -4,12 +4,12 @@
 # The env runs as configured in configs/env/DcmmCfg.py (every throw draws its own disturbances).
 # Commit the code first, so each .json pins the commit that made the results.
 # Usage (from catch_it/, env active):
-#   EXP=exp02_randomized bash run_eval.sh                                        # classical + oracle + random
-#   EXP=exp02_randomized CHECKPOINT=outputs/<run>/nn/best.pth bash run_eval.sh   # also the RL policy
+#   EXP=exp03_harder bash run_eval.sh                                        # classical + oracle + random
+#   EXP=exp03_harder CHECKPOINT=outputs/<run>/nn/best.pth bash run_eval.sh   # also the RL policy
 # Options via env vars: SEEDS (default 10000:15000), WORKERS (default 16)
 set -euo pipefail
 cd "$(dirname "$0")"
-: "${EXP:?set EXP to the experiment name, e.g. EXP=exp02_randomized}"
+: "${EXP:?set EXP to the experiment name, e.g. EXP=exp03_harder}"
 SEEDS=${SEEDS:-10000:15000}
 WORKERS=${WORKERS:-16}
 CONTROLLERS="random oracle classical_single classical_multi classical_perfect"
