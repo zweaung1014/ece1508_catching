@@ -106,15 +106,17 @@ object_mass = np.array([0.035, 0.075])
 # Joint damping on the ball's free joint acts like air drag. Keep ~0 so the aimed throws land in the zone.
 object_damping = np.array([0.0, 0.0])
 object_static = np.array([0.5, 0.75])
-## Gravity: -9.81 +/- gravity_noise
-gravity_noise = 0.5
-## Observation Noise
-k_obs_arm = 0.001
-k_obs_hoop = 0.001
-k_obs_object = 0.005
-k_obs_object_vel = 0.05
-## Actions Noise
-k_act = 0.025
+## Fixed gravity: -9.81 m/s^2
+gravity_noise = 0.0
+
+## No additive observation noise during normal RL training
+k_obs_arm = 0.0
+k_obs_hoop = 0.0
+k_obs_object = 0.0
+k_obs_object_vel = 0.0
+
+## No multiplicative actuator noise
+k_act = 0.0
 ## Action Delay
 act_delay = {
     'arm': [1,],

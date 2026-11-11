@@ -24,6 +24,7 @@ class PPO_Hoop(object):
     def __init__(self, env, output_dif, full_config):
         self.rank = -1
         self.device = full_config['rl_device']
+        self.seed = int(full_config.seed)
         self.network_config = full_config.train.network
         self.ppo_config = full_config.train.ppo
         # ---- build environment ----
@@ -165,7 +166,7 @@ class PPO_Hoop(object):
         start_time = time.time()
         _t = time.time()
         _last_t = time.time()
-        reset_obs, _ = self.env.reset()
+        reset_obs, _ = self.env.reset(seed=self.seed)
         self.obs = {'obs': self.obs2tensor(reset_obs)}
         self.agent_steps = self.batch_size
 
@@ -468,7 +469,7 @@ class PPO_Hoop(object):
 
     def test(self):
         self.set_eval()
-        reset_obs, _ = self.env.reset()
+        reset_obs, _ = self.env.reset(seed=self.seed)
         self.obs = {'obs': self.obs2tensor(reset_obs)}
         self.test_steps = self.batch_size
 

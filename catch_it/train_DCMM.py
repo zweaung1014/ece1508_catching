@@ -4,6 +4,7 @@ import hydra
 import torch
 import os
 import random
+import numpy as np
 import wandb
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
@@ -30,7 +31,25 @@ def main(config: DictConfig):
 
     # use the device for rl
     config.rl_device = f'cuda:{config.device_id}' if config.device_id >= 0 else 'cpu'
-    config.seed = random.seed(config.seed)
+
+    # Resolve the seed once and keep it as an integer.
+    seed = int(config.seed)
+    if seed == -1:
+        seed = random.SystemRandom().randint(0, 2**31 - 1)
+    elif seed < 0:
+        raise ValueError("seed must be -1 or a non-negative integer")
+
+    config.seed = seed
+
+    # Seed random sources in the main process.
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    print(f"Using seed: {seed}")
 
     cprint('Start Building the Environment', 'green', attrs=['bold'])
     # Create and wrap the environment
@@ -51,7 +70,7 @@ def main(config: DictConfig):
     # Get the local date and time
     local_tz = pytz.timezone('Asia/Shanghai')
     current_datetime = datetime.datetime.now().astimezone(local_tz)
-    current_datetime_str = current_datetime.strftime("%Y-%m-%d/%H:%M:%S")
+    current_datetime_str = current_datetime.strftime("%Y-%m-%d/%H-%M-%S")
     output_dif = os.path.join(output_dif, current_datetime_str)
     os.makedirs(output_dif, exist_ok=True)
 
