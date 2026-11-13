@@ -69,13 +69,19 @@ class RunningMeanStd(nn.Module):
         new_count = tot_count
         return new_mean, new_var, new_count
 
+    @torch.no_grad()
+    def update(self, input):
+        # Explicit updates let PPO freeze preprocessing throughout an update.
+        data = input.detach().to(dtype=torch.float64)
+        mean = data.mean(self.axis)
+        var = data.var(self.axis, unbiased=False)
+        self.running_mean, self.running_var, self.count = \
+            self._update_mean_var_count_from_moments(
+                self.running_mean, self.running_var, self.count, mean, var, data.size()[0])
+
     def forward(self, input, unnorm=False):
-        if self.training:
-            mean = input.mean(self.axis) # along channel axis
-            var = input.var(self.axis)
-            self.running_mean, self.running_var, self.count = \
-                self._update_mean_var_count_from_moments(
-                    self.running_mean, self.running_var, self.count, mean, var, input.size()[0])
+        if self.training and not unnorm:
+            self.update(input)
 
         # change shape
         if self.per_channel:

@@ -5,6 +5,10 @@ network:
   mlp:
     units: [256, 128]
   separate_value_mlp: True
+  # Internal policy limits; physical action scales are unchanged.
+  log_std_min: -5.0
+  log_std_max: 0.0  # exploration standard deviation <= 1
+  raw_mean_soft_bound: 2.0  # tanh(2) ~= 0.964; penalize larger logits
 
 ppo:
   name: ${resolve_default:Dcmm,${...experiment}}
@@ -34,5 +38,7 @@ ppo:
   clip_value: True
   bounds_loss_coef: 0.0001
   max_agent_steps: 25000000
+  # Legacy weights-only checkpoints need their last logged global step supplied.
+  resume_agent_steps: 0
   test_num_episodes: 100
   max_test_steps: 10000

@@ -26,6 +26,9 @@ class ExperienceBuffer(Dataset):
             'obses': torch.zeros(
                 (self.transitions_per_env, self.num_envs, self.obs_dim),
                 dtype=torch.float32, device=self.device),
+            'normalized_obses': torch.zeros(
+                (self.transitions_per_env, self.num_envs, self.obs_dim),
+                dtype=torch.float32, device=self.device),
             'rewards': torch.zeros(
                 (self.transitions_per_env, self.num_envs, 1),
                 dtype=torch.float32, device=self.device),
@@ -72,13 +75,7 @@ class ExperienceBuffer(Dataset):
                 input_dict[k] = v[start:end]
         return input_dict['values'], input_dict['neglogpacs'], input_dict['advantages'], \
             input_dict['mus'], input_dict['sigmas'], input_dict['returns'], input_dict['actions'], \
-            input_dict['obses']
-
-    def update_mu_sigma(self, mu, sigma):
-        start = self.last_range[0]
-        end = self.last_range[1]
-        self.data_dict['mus'][start:end] = mu
-        self.data_dict['sigmas'][start:end] = sigma
+            input_dict['normalized_obses']
 
     def update_data(self, name, index, val):
         if type(val) is dict:

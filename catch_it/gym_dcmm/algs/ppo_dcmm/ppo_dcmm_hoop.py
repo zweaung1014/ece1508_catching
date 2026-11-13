@@ -40,6 +40,9 @@ class PPO_Hoop(object):
             'actions_num': self.actions_num,
             'input_shape': self.obs_shape,
             'separate_value_mlp': self.network_config.get('separate_value_mlp', True),
+            'log_std_min': self.network_config.get('log_std_min', -5.0),
+            'log_std_max': self.network_config.get('log_std_max', 0.0),
+            'raw_mean_soft_bound': self.network_config.get('raw_mean_soft_bound', 2.0),
         }
         print("net_config: ", net_config)
         self.model = ActorCritic(net_config)
@@ -82,8 +85,8 @@ class PPO_Hoop(object):
         assert self.batch_size % self.minibatch_size == 0 or full_config.test
         # ---- scheduler ----
         self.lr_schedule = self.ppo_config['lr_schedule']
+        self.kl_threshold = self.ppo_config['kl_threshold']
         if self.lr_schedule == 'kl':
-            self.kl_threshold = self.ppo_config['kl_threshold']
             self.scheduler = AdaptiveScheduler(self.kl_threshold)
         elif self.lr_schedule == 'linear':
             self.scheduler = LinearScheduler(
@@ -118,6 +121,7 @@ class PPO_Hoop(object):
         self.current_lengths = torch.zeros(batch_size, dtype=torch.float32, device=self.device)
         self.dones = torch.ones((batch_size,), dtype=torch.uint8, device=self.device)
         self.agent_steps = 0
+        self.session_start_steps = 0
         self.max_agent_steps = self.ppo_config['max_agent_steps']
         self.max_test_steps = self.ppo_config['max_test_steps']
         self.best_rewards = -10000
@@ -128,8 +132,8 @@ class PPO_Hoop(object):
 
     def write_stats(self, a_losses, c_losses, b_losses, entropies, kls):
         log_dict = {
-            'performance/RLTrainFPS': self.agent_steps / self.rl_train_time,
-            'performance/EnvStepFPS': self.agent_steps / self.data_collect_time,
+            'performance/RLTrainFPS': (self.agent_steps - self.session_start_steps) / self.rl_train_time,
+            'performance/EnvStepFPS': (self.agent_steps - self.session_start_steps) / self.data_collect_time,
             'losses/actor_loss': torch.mean(torch.stack(a_losses)).item(),
             'losses/bounds_loss': torch.mean(torch.stack(b_losses)).item(),
             'losses/critic_loss': torch.mean(torch.stack(c_losses)).item(),
@@ -157,10 +161,9 @@ class PPO_Hoop(object):
 
     def set_train(self):
         self.model.train()
-        if self.normalize_input:
-            self.running_mean_std.train()
-        if self.normalize_value:
-            self.value_mean_std.train()
+        # Normalization is part of the sampled policy. Do not change it per minibatch.
+        self.running_mean_std.eval()
+        self.value_mean_std.eval()
 
     def train(self):
         start_time = time.time()
@@ -168,7 +171,9 @@ class PPO_Hoop(object):
         _last_t = time.time()
         reset_obs, _ = self.env.reset(seed=self.seed)
         self.obs = {'obs': self.obs2tensor(reset_obs)}
-        self.agent_steps = self.batch_size
+        if self.agent_steps == 0:
+            self.agent_steps = self.batch_size
+        self.session_start_steps = self.agent_steps
 
         while self.agent_steps < self.max_agent_steps:
             self.epoch_num += 1
@@ -178,7 +183,7 @@ class PPO_Hoop(object):
             if self.lr_schedule == 'linear':
                 self.last_lr = self.scheduler.update(self.agent_steps)
             
-            all_fps = self.agent_steps / (time.time() - _t)
+            all_fps = (self.agent_steps - self.session_start_steps) / (time.time() - _t)
             last_fps = (
                 self.batch_size ) \
                 / (time.time() - _last_t)
@@ -236,14 +241,53 @@ class PPO_Hoop(object):
             weights['running_mean_std'] = self.running_mean_std.state_dict()
         if self.value_mean_std:
             weights['value_mean_std'] = self.value_mean_std.state_dict()
-        torch.save(weights, f'{name}.pth')
+        weights['training_state'] = {
+            'agent_steps': int(self.agent_steps),
+            'epoch_num': int(self.epoch_num),
+            'best_rewards': float(self.best_rewards),
+            'last_lr': float(self.last_lr),
+            'optimizer': self.optimizer.state_dict(),
+            'torch_rng_state': torch.get_rng_state(),
+            'cuda_rng_states': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+        }
+        # Replace only after a complete write; retain the previous file if interrupted.
+        temporary_path = f'{name}.pth.tmp'
+        torch.save(weights, temporary_path)
+        os.replace(temporary_path, f'{name}.pth')
 
     def restore_train(self, fn):
         if not fn:
+            if self.ppo_config.get('resume_agent_steps', 0):
+                raise ValueError('resume_agent_steps requires a checkpoint')
             return
-        checkpoint = torch.load(fn, map_location = self.device)
+        checkpoint = torch.load(fn, map_location=self.device, weights_only=True)
         self.model.load_state_dict(checkpoint['model'])
-        self.running_mean_std.load_state_dict(checkpoint['running_mean_std'])
+        if self.normalize_input:
+            self.running_mean_std.load_state_dict(checkpoint['running_mean_std'])
+        if self.normalize_value:
+            self.value_mean_std.load_state_dict(checkpoint['value_mean_std'])
+        state = checkpoint.get('training_state')
+        if state is not None:
+            self.optimizer.load_state_dict(state['optimizer'])
+            self.agent_steps = int(state['agent_steps'])
+            self.epoch_num = int(state['epoch_num'])
+            self.best_rewards = float(state['best_rewards'])
+            self.last_lr = float(state['last_lr'])
+            torch.set_rng_state(state['torch_rng_state'].cpu())
+            if torch.cuda.is_available() and state['cuda_rng_states']:
+                torch.cuda.set_rng_state_all([rng.cpu() for rng in state['cuda_rng_states']])
+            print('Restored optimizer, learning rate, counters and normalization.')
+        else:
+            self.agent_steps = int(self.ppo_config.get('resume_agent_steps', 0))
+            if self.agent_steps < 0 or self.agent_steps % self.batch_size:
+                raise ValueError('resume_agent_steps must be a non-negative multiple of the rollout batch size')
+            self.epoch_num = max(0, self.agent_steps // self.batch_size - 1)
+            print('Legacy checkpoint: restored model and normalization; Adam starts fresh. '
+                  'Use learning_rate and resume_agent_steps to restore the logged rate and progress.')
+        for group in self.optimizer.param_groups:
+            group['lr'] = self.last_lr
+        print(f'Resuming at {self.agent_steps} / {self.max_agent_steps} agent steps; lr={self.last_lr:.10g}. '
+              'Simulation episodes restart; mid-episode state is not restored.')
 
     def restore_test(self, fn):
         checkpoint = torch.load(fn, map_location = self.device)
@@ -263,12 +307,11 @@ class PPO_Hoop(object):
         a_losses, b_losses, c_losses = [], [], []
         entropies, kls = [], []
         for mini_ep in range(0, self.mini_epochs_num):
-            ep_kls = []
             for i in range(len(self.storage)):
                 value_preds, old_action_log_probs, advantage, old_mu, old_sigma, \
                     returns, actions, obs = self.storage[i]
 
-                obs = self.running_mean_std(obs)
+                # These are the exact normalized inputs used during collection.
                 batch_dict = {
                     'prev_actions': actions,
                     'obs': obs,
@@ -277,8 +320,6 @@ class PPO_Hoop(object):
                 action_log_probs = res_dict['prev_neglogp']
                 values = res_dict['values']
                 entropy = res_dict['entropy']
-                mu = res_dict['mus']
-                sigma = res_dict['sigmas']
 
                 # actor loss
                 ratio = torch.exp(old_action_log_probs - action_log_probs)
@@ -296,12 +337,9 @@ class PPO_Hoop(object):
                     c_loss = (values - returns) ** 2
                 # bounded loss
                 if self.bounds_loss_coef > 0:
-                    soft_bound = 1.1
-                    mu_loss_high = torch.clamp_min(mu - soft_bound, 0.0) ** 2
-                    mu_loss_low = torch.clamp_max(mu + soft_bound, 0.0) ** 2
-                    b_loss = (mu_loss_low + mu_loss_high).sum(axis=-1)
+                    b_loss = self.model.mean_bounds_loss(res_dict['raw_mus'])
                 else:
-                    b_loss = 0
+                    b_loss = torch.zeros_like(a_loss)
                 a_loss, c_loss, entropy, b_loss = [
                     torch.mean(loss) for loss in [a_loss, c_loss, entropy, b_loss]]
 
@@ -309,35 +347,52 @@ class PPO_Hoop(object):
                     + b_loss * self.bounds_loss_coef
 
                 self.optimizer.zero_grad()
-                loss.backward(retain_graph=True)
+                loss.backward()
 
                 if self.truncate_grads:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_norm)
                 self.optimizer.step()
-
-                with torch.no_grad():
-                    kl_dist = policy_kl(mu.detach(), sigma.detach(), old_mu, old_sigma)
-
-                kl = kl_dist
+                self.model.project_log_std()
                 a_losses.append(a_loss)
                 c_losses.append(c_loss)
-                ep_kls.append(kl)
                 entropies.append(entropy)
-                if self.bounds_loss_coef is not None:
-                    b_losses.append(b_loss)
+                b_losses.append(b_loss)
 
-                self.storage.update_mu_sigma(mu.detach(), sigma.detach())
-
-            av_kls = torch.mean(torch.stack(ep_kls))
+            # Compare the UPDATED policy against the unchanged rollout policy.
+            # Evaluate the whole batch so all minibatches use the same policy version.
+            data = self.storage.data_dict
+            with torch.no_grad():
+                updated = self.model({
+                    'obs': data['normalized_obses'],
+                    'prev_actions': data['actions'],
+                })
+                av_kls = policy_kl(data['mus'], data['sigmas'],
+                                   updated['mus'], updated['sigmas'])
             kls.append(av_kls)
+            if av_kls.item() > 2.0 * self.kl_threshold:
+                break
 
-            if self.lr_schedule == 'kl':
-                self.last_lr = self.scheduler.update(self.last_lr, av_kls.item())
-            elif self.lr_schedule == 'cos':
-                self.last_lr = self.adjust_learning_rate_cos(mini_ep)
+        # Adjust once per rollout, not six times while reusing the same data.
+        if self.lr_schedule == 'kl':
+            self.last_lr = self.scheduler.update(self.last_lr, av_kls.item())
+        elif self.lr_schedule == 'cos':
+            self.last_lr = self.adjust_learning_rate_cos(mini_ep)
 
-            for param_group in self.optimizer.param_groups:
-                param_group['lr'] = self.last_lr
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = self.last_lr
+
+        self.extra_info.update({
+            'policy/mean_saturation_fraction': (updated['mus'].abs() > 0.95).float().mean().item(),
+            'policy/raw_mean_abs_max': updated['raw_mus'].abs().max().item(),
+            'policy/std_min': updated['sigmas'].min().item(),
+            'policy/std_max': updated['sigmas'].max().item(),
+            'policy/action_clip_fraction': (data['actions'].abs() > 1).float().mean().item(),
+            'info/ppo_epochs': len(kls),
+            'info/kl_last': av_kls.item(),
+        })
+        # Use each raw observation once to prepare statistics for the NEXT rollout.
+        if self.normalize_input:
+            self.running_mean_std.update(data['obses'])
 
         self.rl_train_time += (time.time() - _t)
         return a_losses, c_losses, b_losses, entropies, kls
@@ -365,16 +420,19 @@ class PPO_Hoop(object):
                 meters['outcome/' + name].update(torch.tensor([float(final_info["outcome"] == outcome_id)]))
 
     def model_act(self, obs_dict, inference=False):
-        processed_obs = self.running_mean_std(obs_dict['obs'])
+        processed_obs = (self.running_mean_std(obs_dict['obs'])
+                         if self.normalize_input else obs_dict['obs'])
         input_dict = {
             'obs': processed_obs,
         }
         if not inference:
             res_dict = self.model.act(input_dict)
-            res_dict['values'] = self.value_mean_std(res_dict['values'], True)
+            if self.normalize_value:
+                res_dict['values'] = self.value_mean_std(res_dict['values'], True)
         else:
             res_dict = {}
             res_dict['actions'] = self.model.act_inference(input_dict)
+        res_dict['normalized_obses'] = processed_obs
         return res_dict
 
     def play_steps(self):
@@ -382,6 +440,7 @@ class PPO_Hoop(object):
             res_dict = self.model_act(self.obs)
             # Collect o_t
             self.storage.update_data('obses', n, self.obs['obs'])
+            self.storage.update_data('normalized_obses', n, res_dict['normalized_obses'])
             for k in ['actions', 'neglogpacs', 'values', 'mus', 'sigmas']:
                 self.storage.update_data(k, n, res_dict[k])
             # Do env step
@@ -428,10 +487,11 @@ class PPO_Hoop(object):
         returns = self.storage.data_dict['returns']
         values = self.storage.data_dict['values']
         if self.normalize_value:
-            self.value_mean_std.train()
+            # One update from returns, then normalize both tensors in the same units.
+            self.value_mean_std.update(returns)
+            self.value_mean_std.eval()
             values = self.value_mean_std(values)
             returns = self.value_mean_std(returns)
-            self.value_mean_std.eval()
         self.storage.data_dict['values'] = values
         self.storage.data_dict['returns'] = returns
 
@@ -497,12 +557,10 @@ class PPO_Hoop(object):
 
 
 def policy_kl(p0_mu, p0_sigma, p1_mu, p1_sigma):
-    c1 = torch.log(p1_sigma/p0_sigma + 1e-5)
-    c2 = (p0_sigma ** 2 + (p1_mu - p0_mu) ** 2) / (2.0 * (p1_sigma ** 2 + 1e-5))
-    c3 = -1.0 / 2.0
-    kl = c1 + c2 + c3
-    kl = kl.sum(dim=-1)  # returning mean between all steps of sum between all actions
-    return kl.mean()
+    """Mean KL(old || new), summed across independent action dimensions."""
+    old = torch.distributions.Normal(p0_mu, p0_sigma)
+    new = torch.distributions.Normal(p1_mu, p1_sigma)
+    return torch.distributions.kl_divergence(old, new).sum(-1).mean()
 
 class AdaptiveScheduler(object):
     def __init__(self, kl_threshold=0.008):

@@ -35,6 +35,9 @@ class ActorCritic(nn.Module):
         actions_num = kwargs.pop('actions_num')
         input_shape = kwargs.pop('input_shape')
         self.units = kwargs.pop('actor_units')
+        self.log_std_min = kwargs.get('log_std_min', -5.0)
+        self.log_std_max = kwargs.get('log_std_max', 0.0)
+        self.raw_mean_soft_bound = kwargs.get('raw_mean_soft_bound', 2.0)
         mlp_input_shape = input_shape[0]
 
         out_size = self.units[-1]
@@ -76,7 +79,7 @@ class ActorCritic(nn.Module):
     def act(self, obs_dict):
         # used specifically to collection samples during training
         # it contains exploration so needs to sample from distribution
-        mu, logstd, value = self._actor_critic(obs_dict)
+        mu, logstd, value, raw_mu = self._actor_critic(obs_dict)
         sigma = torch.exp(logstd)
         distr = torch.distributions.Normal(mu, sigma)
         selected_action = distr.sample()
@@ -86,41 +89,52 @@ class ActorCritic(nn.Module):
             'actions': selected_action,
             'mus': mu,
             'sigmas': sigma,
+            'raw_mus': raw_mu,
         }
         return result
 
     @torch.no_grad()
     def act_inference(self, obs_dict):
         # used for testing
-        mu, logstd, value = self._actor_critic(obs_dict)
+        mu, logstd, value, _ = self._actor_critic(obs_dict)
         return mu
 
     def _actor_critic(self, obs_dict):
         obs = obs_dict['obs']
 
         x = self.actor_mlp(obs)
-        mu = self.mu(x)
+        raw_mu = self.mu(x)
         if self.separate_value_mlp:
             x = self.value_mlp(obs)
         value = self.value(x)
 
-        sigma = self.sigma
+        logstd = self.sigma.clamp(self.log_std_min, self.log_std_max)
         # Normalize to (-1,1)
-        mu = torch.tanh(mu)
-        return mu, mu * 0 + sigma, value
+        mu = torch.tanh(raw_mu)
+        return mu, logstd.expand_as(mu), value, raw_mu
+
+    @torch.no_grad()
+    def project_log_std(self):
+        # Keep the parameter itself in range so a clamp cannot trap it outside.
+        self.sigma.clamp_(self.log_std_min, self.log_std_max)
+
+    def mean_bounds_loss(self, raw_mu):
+        # Penalize BEFORE tanh: this still has a gradient when tanh saturates.
+        return torch.clamp_min(raw_mu.abs() - self.raw_mean_soft_bound, 0.0).square().sum(-1)
 
     def forward(self, input_dict):
         prev_actions = input_dict.get('prev_actions', None)
-        mu, logstd, value = self._actor_critic(input_dict)
+        mu, logstd, value, raw_mu = self._actor_critic(input_dict)
         sigma = torch.exp(logstd)
         distr = torch.distributions.Normal(mu, sigma)
         entropy = distr.entropy().sum(dim=-1)
         prev_neglogp = -distr.log_prob(prev_actions).sum(1)
         result = {
-            'prev_neglogp': torch.squeeze(prev_neglogp),
+            'prev_neglogp': prev_neglogp,
             'values': value,
             'entropy': entropy,
             'mus': mu,
             'sigmas': sigma,
+            'raw_mus': raw_mu,
         }
         return result
