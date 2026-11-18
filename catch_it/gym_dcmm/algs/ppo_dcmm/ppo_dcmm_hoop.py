@@ -192,8 +192,12 @@ class PPO_Hoop(object):
                             f'Last FPS: {last_fps:.1f} | ' \
                             f'Collect Time: {self.data_collect_time / 60:.1f} min | ' \
                             f'Train RL Time: {self.rl_train_time / 60:.1f} min | ' \
-                            f'Current Best: {self.best_rewards:.2f}'
-            print(info_string)
+                            f'Current Best: {self.best_rewards:.2f} | ' \
+                            f'Catch: {self.episode_stats["success"].get_mean():.3f} | ' \
+                            f'LR: {self.last_lr:.1e} | ' \
+                            f'Sigma: {torch.exp(self.model.sigma.clamp(self.model.log_std_min, self.model.log_std_max)).mean().item():.2f}'
+            # flush: the log goes to a file during long runs, and buffered lines would arrive in bursts
+            print(info_string, flush=True)
 
             self.write_stats(a_losses, c_losses, b_losses, entropies, kls)
 
