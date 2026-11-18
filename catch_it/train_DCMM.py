@@ -15,8 +15,22 @@ import gymnasium as gym
 import gym_dcmm
 import datetime
 import pytz
+import subprocess
 # os.environ['MUJOCO_GL'] = 'egl'
 OmegaConf.register_new_resolver('resolve_default', lambda default, arg: default if arg=='' else arg)
+
+
+
+def git_info():
+    # Commit of the code this run trains with, and whether it had uncommitted changes
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=here, text=True).strip()
+        dirty = subprocess.call(["git", "diff", "--quiet", "HEAD"], cwd=here) != 0
+        return commit, dirty
+    except Exception:
+        return "unknown", True
+
 
 @hydra.main(config_name='config', config_path='configs')
 def main(config: DictConfig):
@@ -73,6 +87,13 @@ def main(config: DictConfig):
     current_datetime_str = current_datetime.strftime("%Y-%m-%d/%H-%M-%S")
     output_dif = os.path.join(output_dif, current_datetime_str)
     os.makedirs(output_dif, exist_ok=True)
+    # Record what this run trains with (the code's commit and the full config)
+    commit, dirty = git_info()
+    if dirty and not config.test:
+        cprint('WARNING: uncommitted changes; git.txt cannot pin the code of this run', 'yellow')
+    with open(os.path.join(output_dif, 'git.txt'), 'w') as f:
+        f.write("commit {}\ndirty {}\n".format(commit, dirty))
+    OmegaConf.save(config, os.path.join(output_dif, 'config.yaml'))
 
     agent = PPO_Hoop(env, output_dif, full_config=config)
 

@@ -115,10 +115,29 @@ nice -n 10 python train_DCMM.py task=HoopCatch num_envs=8 device_id=0 output_nam
   train.ppo.max_agent_steps=<remaining_steps>
 ```
 
+## exp05: ball noise, steadier PPO settings (whole pipeline, ~14 h)
+
+What and why: `results/exp05_ball_noise/README.md`. One background job runs everything: smoke test, settings check,
+baselines, training, checkpoint choice on the validation throws, training curves, test, summary.
+It survives closing the terminal, is memory-capped (11G), and keeps the laptop from sleeping (keep it plugged in).
+
+```bash
+systemd-run --user --unit=exp05 -p MemoryMax=11G -p MemorySwapMax=0 --nice=10 \
+  --setenv=OMP_NUM_THREADS=1 --setenv=MKL_NUM_THREADS=1 --setenv=OPENBLAS_NUM_THREADS=1 \
+  --working-directory=$PWD systemd-inhibit --what=sleep:idle --why=exp05 bash run_exp05.sh
+
+cat results/exp05_ball_noise/STATUS                        # running <stage> / done / failed <stage>
+tail -f results/exp05_ball_noise/pipeline.log
+grep "Agent Steps" outputs/rl_exp05/train.log | tail -n 3  # training progress (catch rate, LR, exploration std)
+systemctl --user stop exp05                                 # stop; rerunning skips the stages already done
+```
+
+Results: `results/exp05_ball_noise/` (`summary.md`, `validation.md`, `training_curves.png`, `sanity.txt`).
+Training curves of any run: `python plot_training.py --run_dir outputs/<name>/<date>/<time> --out <file>`.
+
 ## Gotchas
 
-- `64 * num_envs` must be divisible by `train.ppo.minibatch_size` (default 512) → use `num_envs` = 8, 16, 24, 32…
-  For `num_envs=4` add `train.ppo.minibatch_size=128`.
+- `horizon_length * num_envs` (512 * num_envs) must be divisible by `train.ppo.minibatch_size` (2048) → use `num_envs` = 4, 8, 12, 16…
 - Too many envs freezes the laptop (RAM/CPU). 8 is safe here; try 16 only after a short FPS test.
 - No GPU / driver issue → use `device_id=-1` (CPU; training speed barely changes since simulation is CPU-bound).
 - Checkpoints from the old Tracking/Catching tasks do not load (different observation/action sizes).
