@@ -109,11 +109,16 @@ object_static = np.array([0.5, 0.75])
 ## Fixed gravity: -9.81 m/s^2
 gravity_noise = 0.0
 
-## No additive observation noise during normal RL training
+## Additive observation noise (Gaussian std). exp05: only the ball readings are noisy.
+# Arm joint and hoop readings are exact.
 k_obs_arm = 0.0
 k_obs_hoop = 0.0
-k_obs_object = 0.0
-k_obs_object_vel = 0.0
+# Ball position noise: the std is drawn per throw from this range (m); a good to mediocre depth camera at 2-3 m.
+# Same range as exp03 (larry-catch, results/exp03_harder/README.md).
+k_obs_object = np.array([0.005, 0.02])
+# Ball velocity noise: the std is drawn per throw from this range (m/s); lightly filtered differences of those
+# positions (unfiltered differences at 25 Hz would be ~0.18-0.7 m/s). Same range as exp03.
+k_obs_object_vel = np.array([0.1, 0.4])
 
 ## No multiplicative actuator noise
 k_act = 0.0

@@ -218,6 +218,14 @@ class DcmmVecEnv(gym.Env):
 
         # Random PID Params
         self.k_arm = np.ones(6)
+        # Ball sensor noise std of this throw (drawn per throw in random_obs_noise)
+        self.k_obs_object = float(DcmmCfg.k_obs_object[0])
+        self.k_obs_object_vel = float(DcmmCfg.k_obs_object_vel[0])
+        # Logged for evaluation only (eval_catch.py); this env has no air drag, no wind and no action delay
+        self.object_damping = 0.0
+        self.wind_force = np.zeros(3)
+        self.act_delay_steps = 0
+        self.throw_flight_time = 0.0
 
     def _reset_episode_state(self):
         self.outcome = OUTCOME_NONE
@@ -226,6 +234,8 @@ class DcmmVecEnv(gym.Env):
         self.ball_touched = False
         self.prev_d_path = None
         self.prev_ring_side = 0.0
+        # Env time (s since reset) at which the ball was released; logged for evaluation only
+        self.throw_time = None
         # Episode statistics (logged at the end of every episode)
         self.min_ball_dist = 10.0
         self.min_path_dist = 10.0
@@ -259,9 +269,9 @@ class DcmmVecEnv(gym.Env):
             self.prev_hoop_pos3d[:] = hoop_pos3d[:]
             self.prev_obj_pos3d[:] = obj_pos3d[:]
             self.init_pos = False
-        # Add Obs Noise (Additive DcmmCfg.k_obs_*)
+        # Add Obs Noise (Additive DcmmCfg.k_obs_*; the ball's std is drawn per throw)
         hoop_pos_obs = hoop_pos3d + np.random.normal(0, DcmmCfg.k_obs_hoop, 3)
-        obj_pos_obs = obj_pos3d + np.random.normal(0, DcmmCfg.k_obs_object, 3)
+        obj_pos_obs = obj_pos3d + np.random.normal(0, self.k_obs_object, 3)
         obs = {
             "hoop": {
                 "pos3d": hoop_pos_obs,
@@ -274,7 +284,7 @@ class DcmmVecEnv(gym.Env):
             },
             "object": {
                 "pos3d": obj_pos_obs,
-                "v_lin_3d": (obj_pos3d - self.prev_obj_pos3d)*self.fps + np.random.normal(0, DcmmCfg.k_obs_object_vel, 3),
+                "v_lin_3d": (obj_pos3d - self.prev_obj_pos3d)*self.fps + np.random.normal(0, self.k_obs_object_vel, 3),
                 "rel_pos3d": obj_pos_obs - hoop_pos_obs,
             },
             "prev_action": self.prev_action.copy(),
@@ -329,7 +339,8 @@ class DcmmVecEnv(gym.Env):
         # Thin hollow sphere (like a tennis ball)
         model.body_inertia[self.object_body_id] = 2.0 / 3.0 * self.object_mass * self.object_radius**2
         adr = self.Dcmm.object_qvel_adr
-        model.dof_damping[adr:adr+6] = np.random.uniform(DcmmCfg.object_damping[0], DcmmCfg.object_damping[1])
+        self.object_damping = np.random.uniform(DcmmCfg.object_damping[0], DcmmCfg.object_damping[1])
+        model.dof_damping[adr:adr+6] = self.object_damping
 
     def random_throw(self):
         # Target point inside the catch zone (w.r.t. the arm base)
@@ -349,6 +360,7 @@ class DcmmVecEnv(gym.Env):
                                height])
         # Ballistic velocity that hits the target after the flight time T: p_T = p_0 + v_0 T + 0.5 g T^2
         T = np.random.uniform(DcmmCfg.flight_time[0], DcmmCfg.flight_time[1])
+        self.throw_flight_time = T  # logged for evaluation only
         g = self.Dcmm.model.opt.gravity.copy()
         v0 = (target - launch_pos) / T - 0.5 * g * T
         self.throw_arrival_vel = v0 + g * T
@@ -366,8 +378,15 @@ class DcmmVecEnv(gym.Env):
     def random_delay(self):
         # Random the Delay Buffer Params
         self.action_buffer["arm"].set_maxlen(np.random.choice(DcmmCfg.act_delay['arm']))
+        # Buffer length 1 = no delay; the arm follows the command from (length - 1) steps ago (logged)
+        self.act_delay_steps = int(self.action_buffer["arm"].maxlen) - 1
         # Clear Buffer
         self.action_buffer["arm"].clear()
+
+    def random_obs_noise(self):
+        # Std of the ball velocity noise, then of the ball position noise, for this throw (same order as exp03)
+        self.k_obs_object_vel = np.random.uniform(DcmmCfg.k_obs_object_vel[0], DcmmCfg.k_obs_object_vel[1])
+        self.k_obs_object = np.random.uniform(DcmmCfg.k_obs_object[0], DcmmCfg.k_obs_object[1])
 
     def _reset_simulation(self):
         # Reset the data in Mujoco Simulation
@@ -396,6 +415,8 @@ class DcmmVecEnv(gym.Env):
         self.random_PID()
         # Random Delay
         self.random_delay()
+        # Random ball noise (drawn last, so the throw, ball and PID draws above stay the same per seed)
+        self.random_obs_noise()
         # Forward Kinematics
         mujoco.mj_forward(self.Dcmm.model, self.Dcmm.data)
         mujoco.mj_forward(self.Dcmm.model_arm, self.Dcmm.data_arm)
@@ -603,6 +624,7 @@ class DcmmVecEnv(gym.Env):
                                             velocity=self.object_vel6d[:])
                 self.Dcmm.data.ctrl[self.Dcmm.object_ctrl_id] = 0.0
                 self.object_throw = True
+                self.throw_time = self.Dcmm.data.time - self.start_time
 
             mujoco.mj_step(self.Dcmm.model, self.Dcmm.data)
 
