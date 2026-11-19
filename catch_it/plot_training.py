@@ -144,15 +144,17 @@ def main():
                     xytext=(4, 6), textcoords="offset points", color=INK, fontsize=8, va="center")
     if len(val):
         vx = val["step"].values / 1e6
-        ax.errorbar(vx, 100 * val["val_catch"], yerr=[100 * (val["val_catch"] - val["lo"]), 100 * (val["hi"] - val["val_catch"])],
+        # clip: at 500/500 the Wilson upper bound rounds to just under 1.0, a tiny negative error bar
+        yerr = [np.clip(100 * (val["val_catch"] - val["lo"]), 0, None), np.clip(100 * (val["hi"] - val["val_catch"]), 0, None)]
+        ax.errorbar(vx, 100 * val["val_catch"], yerr=yerr,
                     color=VAL, linewidth=2, marker="o", markersize=5, capsize=0, elinewidth=1,
                     markeredgecolor=SURFACE, markeredgewidth=1.5)
         ax.annotate("validation", (vx[-1], 100 * val["val_catch"].values[-1]), xytext=(4, -6),
                     textcoords="offset points", color=INK, fontsize=8, va="center")
     if ref is not None:
         ax.axhline(100 * ref["catch_rate"], color=INK2, linewidth=1.2, linestyle="--")
-        ax.annotate("{} {:.1f}%".format(args.ref_label, 100 * ref["catch_rate"]), (0, 100 * ref["catch_rate"]),
-                    xytext=(2, -11), textcoords="offset points", color=INK2, fontsize=8)
+        ax.annotate("{} {:.1f}%".format(args.ref_label, 100 * ref["catch_rate"]), (0.45 * x[-1], 100 * ref["catch_rate"]),
+                    xytext=(0, -11), textcoords="offset points", color=INK2, fontsize=8)
     ax.set_ylim(0, 102)
     handles = [plt.Line2D([], [], color=TRAIN, linewidth=2, label="training (stochastic, last 200 episodes)")]
     if len(val):
