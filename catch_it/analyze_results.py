@@ -64,6 +64,8 @@ def miss_reason(r):
 def load(exp_dir, conditions):
     frames = []
     for path in sorted(glob.glob(os.path.join(exp_dir, "**", "*.csv"), recursive=True)):
+        if not os.path.exists(os.path.splitext(path)[0] + ".json"):
+            continue                                   # not an eval_catch.py result (e.g. training-curve CSVs)
         df = pd.read_csv(path)
         if "condition" not in df.columns:              # one setting per experiment (exp02 on)
             df["condition"] = os.path.basename(os.path.normpath(exp_dir))
