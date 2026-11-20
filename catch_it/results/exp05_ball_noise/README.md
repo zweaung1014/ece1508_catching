@@ -2,7 +2,62 @@
 
 Author: Zwe Min Htet Aung
 
-**Status:** the pipeline (`run_exp05.sh`) writes its progress to `STATUS` and `pipeline.log` in this folder. This README was written before the run, and the protocol below was fixed before any exp05 result was seen.
+**Status:** done (2026-11-19). The two sections below, Results and Where to find everything, were added after the run. Every section from Why onward was written, and the protocol fixed, before any exp05 result was seen; those sections are unchanged.
+
+## Results (added 2026-11-19, after the run)
+
+**RL tied the classical catcher. Under the decision rule, it does not beat it.** Test throws 10000–14999, each controller run once:
+
+| Controller | Catch | 95% CI |
+|---|---|---|
+| **rl** (snapshot at 14M steps, picked on validation) | **99.8%** (4990/5000) | 99.6–99.9% |
+| classical_multi | 99.8% (4989/5000) | 99.6–99.9% |
+| classical_perfect (true ball state) | 99.8% (4990/5000) | 99.6–99.9% |
+| oracle | 95.7% | 95.1–96.2% |
+| classical_single (one reading) | 31.8% | 30.6–33.1% |
+| random | 4.8% | 4.2–5.4% |
+
+- **Paired McNemar test against classical_multi:** 10 throws only RL caught, 9 only classical_multi caught, p = 1. There is no difference.
+- **The task leaves no room to win.** `classical_perfect`, which reads the true ball state, also catches 99.8%.
+- **The two controllers miss different throws.** Only seed 14149 is missed by both (`figures/misses_map.png`).
+  - classical_multi's 11 misses are throws it could not reach in time.
+  - 9 of RL's 10 misses were aimed more than 0.5 m from the arm base, where 49% of all throws land.
+  - 6 of RL's 10 misses had velocity noise std above 0.35 m/s, where 16% of all throws fall.
+- **One noisy frame is enough for RL.** With a single frame RL matches classical_multi at every noise level. classical_single, which also uses one reading, drops from 62% to 16% as the velocity noise std goes from 0.1 to 0.4 m/s (`figures/catch_vs_noise.png`).
+- **Secondary measures,** which are not part of the decision rule (`figures/how_they_move.png`). Compared with classical_multi, RL has:
+  - far fewer IK failures: 0.02 vs 0.48 per throw;
+  - less hoop travel: 0.88 vs 1.00 m;
+  - smaller action changes: 0.68 vs 0.92.
+- **Training** (`training_curves.png`, `figures/learning_curve.png`):
+  - **No under-fitting:** 98.4% on validation by 5M steps.
+  - **No over-fitting:** validation stays at or above the training catch rate throughout.
+  - **Stable:** 99.2–100% on validation from 6M to 25M steps, unlike exp03 and exp04, which rose and then fell.
+  - **To watch:** late in the run the KL climbs to the early-stop line (0.032) as the exploration std falls to 0.1. A decaying learning rate would be the next change.
+- **The sanity gate passed:** 100% with the aim point visible, after 2M steps (`sanity.txt`).
+- **Fixed after the run, in plotting and the summary only:**
+  - `24b17bc`: the curves plot crashed at 500/500.
+  - `5c58387`: `summary.md` listed the curve CSVs as controllers.
+
+  Training, the checkpoint pick and the test run were not touched.
+
+## Where to find everything
+
+- **In git** (branch `larry-ball-noise`, folder `catch_it/results/exp05_ball_noise/`):
+  - this README;
+  - `summary.md`, the full tables;
+  - `figures/`, the report figures;
+  - `training_curves.png`, every training signal;
+  - `validation.md` and `picked.txt`;
+  - `rl_policy.pth`;
+  - one CSV and one JSON per controller.
+- **Only on the training machine** (git-ignored, under `catch_it/`):
+  - `outputs/rl_exp05/2026-11-19/08-48-56/`: the run, with all snapshots in `nn/`, TensorBoard in `tb/`, `config.yaml` and `git.txt`;
+  - `outputs/rl_exp05/train.log`;
+  - `outputs/exp05_val/`: validation results per snapshot, plus classical_multi on the validation throws;
+  - `pipeline.log` in this folder.
+- **Redraw the figures:**
+  - `python plot_results.py --exp exp05_ball_noise --val_ref outputs/exp05_val/val_ref/classical_multi.json`
+  - `python plot_training.py ...` (see `run_exp05.sh` stage 6)
 
 ## Why
 
@@ -100,6 +155,11 @@ The other panels show:
 | `rl_policy.pth` | the frozen pick. `*.pth` is git-ignored; commit with `git add -f`. |
 | `<controller>.csv` / `.json` | one row per test throw / settings and commit |
 | `summary.md` | all tables |
+| `figures/test_catch_rates.png` | test catch rate of every controller (made by `plot_results.py`, after the run) |
+| `figures/catch_vs_noise.png` | catch rate by position / velocity noise level |
+| `figures/misses_map.png` | where the missed throws were aimed, and their velocity noise |
+| `figures/how_they_move.png` | IK failures, hoop travel, action change (secondary) |
+| `figures/learning_curve.png` | RL catch rate during training: training vs validation |
 
 ## Reproduce
 

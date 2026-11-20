@@ -1,0 +1,1 @@
+sanity (aim point visible): catch 1.000 on 200 validation throws (seeds 0:200) | need >= 0.50: PASS
