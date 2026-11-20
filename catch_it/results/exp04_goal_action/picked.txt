@@ -1,0 +1,2 @@
+goal:  BEST /home/zweminhtetaung/ece1508/catch_it/outputs/rl_exp04_goal/2026-11-17/23:54:22/nn/ep_01000_step_0001m_reward_-1.20.pth 0.1080
+delta: BEST /home/zweminhtetaung/ece1508/catch_it/outputs/rl_exp03/2026-11-16/09:27:29/nn/best_reward_9.78.pth 0.1540
